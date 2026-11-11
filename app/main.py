@@ -11,6 +11,7 @@ import logging.handlers
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.news.router import router as news_router
 
@@ -53,3 +54,16 @@ def home():
 @app.get("/health")
 def health_check():
     return {"status": "healthy"}
+
+
+# Purpose: Allow the deployed React frontend to communicate with the FastAPI backend.
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://ai-news-intelligence-frontend.onrender.com",
+    ],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
