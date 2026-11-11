@@ -14,8 +14,8 @@ import type {
 } from "../types/news";
 
 const api = axios.create({
-  baseURL: "/api",
-  timeout: 15000,
+  baseURL: import.meta.env.VITE_API_BASE_URL || "/api",
+  timeout: 120000,
 });
 
 export const getNewsStatistics = async (): Promise<NewsStatistics> => {
