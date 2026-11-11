@@ -155,6 +155,9 @@ The pipeline executes these steps in order:
 
 | Method | Endpoint | Description |
 |---|---|---|
+| `GET` | `/api/news/pipeline/run` | Scrape + AI analysis (full pipeline) |
+| `GET` | `/api/news/pipeline/scrape` | Scrape articles only (no AI) |
+| `GET` | `/api/news/pipeline/analyze` | Run AI analysis on pending articles |
 | `GET` | `/api/news` | List articles (pagination, category filter) |
 | `GET` | `/api/news/{id}` | Get article by ID |
 | `GET` | `/api/news/search?q=` | Keyword search |

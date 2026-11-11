@@ -22,6 +22,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.database.connection import SessionLocal
 from app.database.repository import (
     create_articles_bulk,
+    get_ai_pending_articles,
     get_existing_article_urls,
 )
 from app.news.cleaner import clean_article_text
@@ -98,6 +99,34 @@ It downloads the webpage, extracts and cleans its content,
 generates a content hash, and optionally enriches the article
 with AI-generated summary, key points, category, and sentiment.
 """
+
+
+def scrape_article(article) -> Optional[dict]:
+    """Download, extract, and clean one article. No AI analysis."""
+
+    html = fetch_article_html(str(article.url))
+
+    if not html:
+        return None
+
+    extracted_content = extract_article_text(html)
+
+    if not extracted_content:
+        return None
+
+    cleaned_content = clean_article_text(extracted_content)
+
+    if not cleaned_content:
+        return None
+
+    article.content = cleaned_content
+    article.content_hash = generate_content_hash(cleaned_content)
+    article.ai_summary = None
+    article.ai_key_points = None
+    article.ai_category = None
+    article.ai_sentiment = None
+
+    return article.model_dump(mode="json")
 
 
 def process_article(article) -> Optional[dict]:
@@ -190,6 +219,148 @@ It sorts RSS entries by publication date, skips previously stored URLs,
 processes new articles, removes duplicates, and saves the results
 to JSON and PostgreSQL.
 """
+
+
+def run_scraping_pipeline() -> dict:
+    """Fetch RSS feeds, scrape articles, and save to DB without AI analysis."""
+
+    logger.info("Starting scraping pipeline")
+
+    rss_articles = parse_all_feeds()
+
+    rss_articles.sort(key=get_publication_sort_key, reverse=True)
+
+    article_urls = [normalize_url(str(article.url)) for article in rss_articles]
+
+    try:
+        with SessionLocal() as db:
+            database_urls = get_existing_article_urls(db, article_urls)
+    except SQLAlchemyError as error:
+        logger.exception("Failed to check existing article URLs")
+        return {
+            "status": "failed",
+            "error": str(error),
+            "rss_articles_found": len(rss_articles),
+            "scraped_articles": 0,
+            "skipped_duplicates": 0,
+            "failed_articles": 0,
+            "database_inserted": 0,
+        }
+
+    seen_urls = set(database_urls)
+    seen_content_hashes = set()
+    scraped_articles = []
+    skipped_duplicates = 0
+    failed_articles = 0
+
+    for article in rss_articles:
+        if len(scraped_articles) >= MAX_ARTICLES_PER_RUN:
+            break
+
+        normalized_url = normalize_url(str(article.url))
+
+        if normalized_url in seen_urls:
+            skipped_duplicates += 1
+            continue
+
+        seen_urls.add(normalized_url)
+
+        scraped = scrape_article(article)
+
+        if not scraped:
+            failed_articles += 1
+            continue
+
+        if scraped["content_hash"] in seen_content_hashes:
+            skipped_duplicates += 1
+            continue
+
+        seen_content_hashes.add(scraped["content_hash"])
+        scraped_articles.append(scraped)
+
+    output_file = None
+    if scraped_articles:
+        output_file = save_articles(scraped_articles)
+
+    database_inserted = 0
+    database_error = None
+
+    try:
+        database_inserted = save_articles_to_database(scraped_articles)
+        database_status = "completed"
+    except SQLAlchemyError as error:
+        database_status = "failed"
+        database_error = str(error)
+        logger.exception("Failed to save scraped articles to PostgreSQL")
+
+    result = {
+        "status": "completed" if database_status == "completed" else "completed_with_database_error",
+        "rss_articles_found": len(rss_articles),
+        "scraped_articles": len(scraped_articles),
+        "skipped_duplicates": skipped_duplicates,
+        "failed_articles": failed_articles,
+        "database_inserted": database_inserted,
+        "database_status": database_status,
+        "database_error": database_error,
+        "output_file": str(output_file) if output_file else None,
+    }
+
+    logger.info("Scraping pipeline completed: %s", result)
+    return result
+
+
+def run_ai_analysis_pipeline() -> dict:
+    """Run Gemini AI analysis on all pending (unanalyzed) articles in DB."""
+
+    logger.info("Starting AI analysis pipeline")
+
+    try:
+        with SessionLocal() as db:
+            pending = get_ai_pending_articles(db, limit=MAX_ARTICLES_PER_RUN)
+    except SQLAlchemyError as error:
+        logger.exception("Failed to fetch pending articles")
+        return {"status": "failed", "error": str(error)}
+
+    if not pending:
+        return {"status": "completed", "analyzed": 0, "failed": 0, "message": "No pending articles found."}
+
+    analyzed = 0
+    failed = 0
+
+    for article in pending:
+        if not article.content:
+            failed += 1
+            continue
+
+        try:
+            ai_result = generate_news_summary(
+                title=article.title,
+                content=article.content[:20000],
+            )
+
+            with SessionLocal() as db:
+                db_article = db.get(type(article), article.id)
+                db_article.ai_summary = ai_result["summary"]
+                db_article.ai_key_points = ai_result["key_points"]
+                db_article.ai_category = ai_result["category"]
+                db_article.ai_sentiment = ai_result["sentiment"]
+                db.commit()
+
+            analyzed += 1
+            logger.info("AI analysis completed for: %s", article.title)
+
+        except Exception:
+            failed += 1
+            logger.exception("AI analysis failed for: %s", article.title)
+
+    result = {
+        "status": "completed",
+        "analyzed": analyzed,
+        "failed": failed,
+    }
+
+    logger.info("AI analysis pipeline completed: %s", result)
+    return result
 
 
 def run_news_pipeline() -> dict:
