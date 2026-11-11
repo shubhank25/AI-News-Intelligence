@@ -28,6 +28,7 @@ from app.database.repository import (
     get_news_statistics,
     search_articles,
 )
+from app.news.pipeline import run_news_pipeline, run_scraping_pipeline, run_ai_analysis_pipeline
 from app.news.schemas import NewsArticleResponse
 
 router = APIRouter(
@@ -216,6 +217,24 @@ def get_publishing_trends(
         date_from=date_from,
         date_to=date_to,
     )
+
+
+@router.get("/pipeline/run")
+def trigger_pipeline():
+    """Trigger the full news collection and AI analysis pipeline."""
+    return run_news_pipeline()
+
+
+@router.get("/pipeline/scrape")
+def trigger_scraping():
+    """Fetch RSS feeds and scrape articles without AI analysis."""
+    return run_scraping_pipeline()
+
+
+@router.get("/pipeline/analyze")
+def trigger_ai_analysis():
+    """Run Gemini AI analysis on all pending articles."""
+    return run_ai_analysis_pipeline()
 
 
 @router.get(
