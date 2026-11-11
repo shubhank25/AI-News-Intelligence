@@ -1,0 +1,27 @@
+
+# Purpose: Run the FastAPI backend and React frontend using Docker Compose.
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ai-news-intelligence-backend:1.0
+    container_name: ai-news-backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: ai-news-intelligence-frontend:1.0
+    container_name: ai-news-frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+    restart: unless-stopped

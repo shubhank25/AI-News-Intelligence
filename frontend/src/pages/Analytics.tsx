@@ -82,10 +82,6 @@ export default function Analytics() {
     fontSize: 12,
   };
 
-  const panelClass = isDark
-    ? "rounded-xl border border-slate-800 bg-slate-900 p-5 shadow-sm transition-colors"
-    : "rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition-colors";
-
   const headingClass = isDark
     ? "text-2xl font-bold text-white"
     : "text-2xl font-bold text-slate-900";

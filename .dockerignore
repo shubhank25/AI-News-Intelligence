@@ -1,0 +1,23 @@
+
+# Purpose: Exclude local, sensitive, and unnecessary files from the Docker build context.
+
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+tests/
+frontend/
+.git/
+.github/
+.vscode/
+
+.env
+.env.*
+!.env.example
+
+data/
+logs/
+
+*.log
+.DS_Store

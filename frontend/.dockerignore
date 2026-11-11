@@ -1,0 +1,11 @@
+
+# Purpose: Exclude local dependencies, build outputs, and development files from the frontend Docker build.
+
+node_modules/
+dist/
+.git/
+.vscode/
+*.log
+.env
+.env.*
+!.env.example
