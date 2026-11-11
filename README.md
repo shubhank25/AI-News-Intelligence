@@ -67,6 +67,7 @@ ai-news-intelligence/
 ├── 💾 data/raw/                 # JSON backups of collected articles
 ├── 🧪 tests/                    # Pytest test suite
 ├── .env.example
+├── init_db.py                   # 🗄️ Database table creation script
 └── requirements.txt
 ```
 
@@ -111,13 +112,43 @@ GEMINI_MODEL=gemini-2.0-flash
 python -m venv venv
 venv\Scripts\activate        # Windows
 pip install -r requirements.txt
+```
+
+### 3️⃣ Database Setup
+
+Make sure PostgreSQL is running and the database exists:
+
+```sql
+CREATE DATABASE ai_news_intelligence;
+```
+
+Then run the init script to create all tables:
+
+```bash
+python init_db.py
+```
+
+Expected output:
+```
+Testing database connection...
+Connection successful.
+Creating tables...
+Done. Tables created:
+  ✓ news_articles
+```
+
+> ⚠️ Re-run `python init_db.py` anytime you update `app/database/models.py` to apply schema changes.
+
+### 4️⃣ Start the Backend
+
+```bash
 uvicorn app.main:app --reload
 ```
 
 > 🌐 API → `http://localhost:8000`
 > 📖 Docs → `http://localhost:8000/docs`
 
-### 3️⃣ Frontend
+### 5️⃣ Frontend
 
 ```bash
 cd frontend
@@ -134,7 +165,7 @@ npm run dev
 Trigger article collection and AI analysis via the API:
 
 ```bash
-POST http://localhost:8000/api/news/pipeline/run
+GET http://localhost:8000/api/news/pipeline/run
 ```
 
 The pipeline executes these steps in order:
@@ -213,16 +244,6 @@ pytest tests/
 | `MAX_ARTICLES_PER_FEED` | `app/news/config.py` | `20` |
 | `REQUEST_TIMEOUT` | `app/news/config.py` | `15s` |
 | `GEMINI_MODEL` | `.env` | `gemini-2.0-flash` |
-
----
-
-## 👨‍💻 Developer
-
-<div align="center">
-
-
-
-</div>
 
 ---
 
