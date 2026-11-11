@@ -258,7 +258,6 @@ SOFTWARE.
 
 <div align="center">
 
-
 *🧠 AI News Intelligence — Collect. Analyze. Understand.* - Built with ❤️ by **Shubhank**
 
 </div>
