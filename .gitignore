@@ -1,0 +1,36 @@
+# ── Secrets & environment variables ──────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Python ────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+venv/
+.venv/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# ── Data & backups (raw collected articles) ───────────────────
+data/raw/
+
+# ── Logs ──────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── IDE & OS ──────────────────────────────────────────────────
+.vscode/
+.idea/
+*.DS_Store
+Thumbs.db
+
+# ── Frontend ──────────────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
