@@ -29,11 +29,13 @@ DB_NAME = os.getenv("DB_NAME", "ai_news_intelligence")
 DB_USER = os.getenv("DB_USER", "postgres")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
 
-if not DB_PASSWORD:
-    raise RuntimeError("DB_PASSWORD is missing. Please configure it in the .env file.")
+# Read optional SSL configuration for cloud PostgreSQL.
+DB_SSLMODE = os.getenv("DB_SSLMODE")
 
+# Add SSL configuration only when explicitly provided.
+DATABASE_QUERY = {"sslmode": DB_SSLMODE} if DB_SSLMODE else {}
 
-# Create database URL safely
+# Create database URL safely.
 DATABASE_URL = URL.create(
     drivername="postgresql+psycopg",
     username=DB_USER,
@@ -41,8 +43,11 @@ DATABASE_URL = URL.create(
     host=DB_HOST,
     port=DB_PORT,
     database=DB_NAME,
+    query=DATABASE_QUERY,
 )
 
+if not DB_PASSWORD:
+    raise RuntimeError("DB_PASSWORD is missing. Please configure it in the .env file.")
 
 # Create SQLAlchemy engine
 engine = create_engine(

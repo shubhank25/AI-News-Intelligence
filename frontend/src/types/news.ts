@@ -19,7 +19,7 @@ export interface NewsArticle {
 
 export interface SourceStatistic {
   source: string;
-  count: number;
+  article_count: number;
 }
 
 export interface SentimentDistribution {

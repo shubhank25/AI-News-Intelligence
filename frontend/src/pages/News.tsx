@@ -20,6 +20,9 @@ import { useTheme } from "../context/ThemeContext";
 
 const PAGE_SIZE = 10;
 
+// Purpose: Restrict sentiment filters to values supported by the backend API.
+type Sentiment = "positive" | "negative" | "neutral";
+
 export default function News() {
   const { theme } = useTheme();
   const isDark = theme === "dark";
@@ -28,7 +31,7 @@ export default function News() {
   const [categories, setCategories] = useState<string[]>([]);
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("");
-  const [sentiment, setSentiment] = useState("");
+  const [sentiment, setSentiment] = useState<Sentiment | "">("");
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -182,7 +185,9 @@ export default function News() {
 
         <select
           value={sentiment}
-          onChange={(event) => setSentiment(event.target.value)}
+          onChange={(event) =>
+            setSentiment(event.target.value as Sentiment | "")
+          }
           className={`w-full rounded-lg border px-4 py-3 text-sm outline-none transition-colors focus:border-blue-500 ${styles.control}`}
         >
           <option value="">All Sentiments</option>
@@ -250,13 +255,12 @@ export default function News() {
 
                 {article.ai_sentiment && (
                   <span
-                    className={`rounded-full px-3 py-1 capitalize ${
-                      article.ai_sentiment === "positive"
-                        ? "bg-green-500/15 text-green-600"
-                        : article.ai_sentiment === "negative"
-                          ? "bg-red-500/15 text-red-600"
-                          : "bg-slate-500/15 text-slate-500"
-                    }`}
+                    className={`rounded-full px-3 py-1 capitalize ${article.ai_sentiment === "positive"
+                      ? "bg-green-500/15 text-green-600"
+                      : article.ai_sentiment === "negative"
+                        ? "bg-red-500/15 text-red-600"
+                        : "bg-slate-500/15 text-slate-500"
+                      }`}
                   >
                     {article.ai_sentiment}
                   </span>
