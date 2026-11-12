@@ -1,14 +1,15 @@
 """
 Purpose:
 This file initializes the FastAPI application, registers API routers,
-configures logging and CORS, and manages the automatic Ollama
-article-analysis scheduler through the application lifespan.
+configures logging and CORS, and manages the automatic Ollama and
+Gemini article-analysis schedulers through the application lifespan.
 """
 
 import asyncio
 import logging
 import logging.handlers
-from contextlib import asynccontextmanager, suppress
+import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -19,7 +20,36 @@ from app.news.router import router as news_router
 from app.ollama.processor import run_ollama_analysis_batch
 from app.ollama.router import router as ollama_router
 
+# --------------------------------------------------
+# Scheduler environment configuration
+# --------------------------------------------------
+
+
+def env_flag(name: str, default: bool = True) -> bool:
+    """Read a boolean environment variable."""
+    return os.getenv(name, str(default)).strip().lower() in (
+        "true",
+        "1",
+        "yes",
+        "on",
+    )
+
+
+ENABLE_OLLAMA_SCHEDULER = env_flag(
+    "ENABLE_OLLAMA_SCHEDULER",
+    True,
+)
+
+ENABLE_GEMINI_SCHEDULER = env_flag(
+    "ENABLE_GEMINI_SCHEDULER",
+    True,
+)
+
+
+# --------------------------------------------------
 # Logging setup
+# --------------------------------------------------
+
 LOGS_DIR = Path(__file__).resolve().parents[1] / "logs"
 LOGS_DIR.mkdir(exist_ok=True)
 
@@ -39,9 +69,18 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+
+# --------------------------------------------------
 # Scheduler configuration
+# --------------------------------------------------
+
 OLLAMA_SCHEDULER_INTERVAL = 300  # 5 minutes
 GEMINI_SCHEDULER_INTERVAL = 300  # 5 minutes
+
+
+# --------------------------------------------------
+# Ollama scheduler
+# --------------------------------------------------
 
 
 async def ollama_scheduler():
@@ -57,7 +96,6 @@ async def ollama_scheduler():
     )
 
     while True:
-        # Wait before the first run and between subsequent runs.
         await asyncio.sleep(OLLAMA_SCHEDULER_INTERVAL)
 
         try:
@@ -76,6 +114,11 @@ async def ollama_scheduler():
 
         except Exception:
             logger.exception("Unexpected error in Ollama scheduler.")
+
+
+# --------------------------------------------------
+# Gemini scheduler
+# --------------------------------------------------
 
 
 async def gemini_scheduler():
@@ -97,8 +140,8 @@ async def gemini_scheduler():
         try:
             logger.info("Starting scheduled Gemini analysis batch...")
 
-            # Run synchronous Gemini processing without blocking
-            # the FastAPI event loop.
+            # Run synchronous Gemini processing without
+            # blocking the FastAPI event loop.
             result = await asyncio.to_thread(run_ai_analysis_pipeline)
 
             logger.info(
@@ -114,28 +157,51 @@ async def gemini_scheduler():
             logger.exception("Unexpected error in Gemini scheduler.")
 
 
+# --------------------------------------------------
+# FastAPI application lifespan
+# --------------------------------------------------
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Start and gracefully stop both AI analysis schedulers."""
+    """
+    Start enabled AI schedulers and gracefully stop them
+    when the FastAPI application shuts down.
+    """
 
-    ollama_task = asyncio.create_task(ollama_scheduler())
-    gemini_task = asyncio.create_task(gemini_scheduler())
+    scheduler_tasks = []
+
+    if ENABLE_OLLAMA_SCHEDULER:
+        logger.info("Ollama scheduler is ENABLED.")
+        scheduler_tasks.append(asyncio.create_task(ollama_scheduler()))
+    else:
+        logger.info("Ollama scheduler is DISABLED.")
+
+    if ENABLE_GEMINI_SCHEDULER:
+        logger.info("Gemini scheduler is ENABLED.")
+        scheduler_tasks.append(asyncio.create_task(gemini_scheduler()))
+    else:
+        logger.info("Gemini scheduler is DISABLED.")
 
     try:
         yield
 
     finally:
-        ollama_task.cancel()
-        gemini_task.cancel()
+        for task in scheduler_tasks:
+            task.cancel()
 
-        await asyncio.gather(
-            ollama_task,
-            gemini_task,
-            return_exceptions=True,
-        )
+        if scheduler_tasks:
+            await asyncio.gather(
+                *scheduler_tasks,
+                return_exceptions=True,
+            )
 
-        logger.info("All AI schedulers stopped.")
+        logger.info("All enabled AI schedulers stopped.")
 
+
+# --------------------------------------------------
+# FastAPI application
+# --------------------------------------------------
 
 app = FastAPI(
     title="AI News Intelligence Aggregator",
@@ -145,9 +211,17 @@ app = FastAPI(
 )
 
 
+# --------------------------------------------------
 # Register API routers
+# --------------------------------------------------
+
 app.include_router(news_router)
 app.include_router(ollama_router)
+
+
+# --------------------------------------------------
+# Health check endpoints
+# --------------------------------------------------
 
 
 @app.get("/")
@@ -160,10 +234,19 @@ def home():
 
 @app.get("/health")
 def health_check():
-    return {"status": "healthy"}
+    return {
+        "status": "healthy",
+        "schedulers": {
+            "ollama": ENABLE_OLLAMA_SCHEDULER,
+            "gemini": ENABLE_GEMINI_SCHEDULER,
+        },
+    }
 
 
-# Allow the deployed React frontend to communicate with the backend.
+# --------------------------------------------------
+# CORS configuration
+# --------------------------------------------------
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
