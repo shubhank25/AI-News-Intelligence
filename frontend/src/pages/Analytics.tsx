@@ -33,23 +33,30 @@ import {
   getCategoryAnalytics,
   getNewsStatistics,
   getPublishingTrends,
+  getOllamaAnalysisStatus,
 } from "../services/api";
 
 import type {
   CategoryStatistic,
   NewsStatistics,
+  OllamaAnalysisStatus,
   PublishingTrend,
 } from "../types/news";
 
 import { useTheme } from "../context/ThemeContext";
+import { useAIModel } from "../context/AIModelContext";
 
 const SENTIMENT_COLORS = ["#16a34a", "#dc2626", "#64748b"];
 
 export default function Analytics() {
   const { theme } = useTheme();
   const isDark = theme === "dark";
+  const { aiProvider } = useAIModel();
+  const isGemini = aiProvider === "gemini";
+  const providerLabel = isGemini ? "Gemini" : "ShubhAI";
 
   const [statistics, setStatistics] = useState<NewsStatistics | null>(null);
+  const [ollamaStatus, setOllamaStatus] = useState<OllamaAnalysisStatus | null>(null);
   const [categories, setCategories] = useState<CategoryStatistic[]>([]);
   const [trends, setTrends] = useState<PublishingTrend[]>([]);
 
@@ -90,7 +97,6 @@ export default function Analytics() {
     ? "mt-1 text-sm text-slate-400"
     : "mt-1 text-sm text-slate-500";
 
-  // Load source, sentiment, and category analytics.
   useEffect(() => {
     let active = true;
 
@@ -99,34 +105,28 @@ export default function Analytics() {
         setLoading(true);
         setError("");
 
-        const [statsData, categoryData] = await Promise.all([
-          getNewsStatistics(),
-          getCategoryAnalytics(),
+        const [statsData, categoryData, ollamaData] = await Promise.all([
+          getNewsStatistics(isGemini ? "gemini" : "shubhAI"),
+          getCategoryAnalytics(isGemini ? "gemini" : "shubhAI"),
+          getOllamaAnalysisStatus(),
         ]);
 
         if (active) {
           setStatistics(statsData);
           setCategories(categoryData);
+          setOllamaStatus(ollamaData);
         }
       } catch (err) {
         console.error("Failed to load analytics:", err);
-
-        if (active) {
-          setError("Unable to load analytics. Please check the backend.");
-        }
+        if (active) setError("Unable to load analytics. Please check the backend.");
       } finally {
-        if (active) {
-          setLoading(false);
-        }
+        if (active) setLoading(false);
       }
     };
 
     void loadAnalytics();
-
-    return () => {
-      active = false;
-    };
-  }, []);
+    return () => { active = false; };
+  }, [isGemini]);
 
   // Load publishing trends whenever the date filters change.
   useEffect(() => {
@@ -164,20 +164,22 @@ export default function Analytics() {
     };
   }, [dateFrom, dateTo]);
 
-  const sentimentData = statistics
+  const aiStats = isGemini
+    ? statistics?.ai_analysis
+    : ollamaStatus
+      ? {
+          analyzed_articles: ollamaStatus.completed,
+          pending_articles: ollamaStatus.pending,
+          coverage_percentage: ollamaStatus.coverage_percentage,
+          sentiment_distribution: ollamaStatus.sentiment_distribution,
+        }
+      : null;
+
+  const sentimentData = aiStats
     ? [
-        {
-          name: "Positive",
-          value: statistics.ai_analysis.sentiment_distribution.positive,
-        },
-        {
-          name: "Negative",
-          value: statistics.ai_analysis.sentiment_distribution.negative,
-        },
-        {
-          name: "Neutral",
-          value: statistics.ai_analysis.sentiment_distribution.neutral,
-        },
+        { name: "Positive", value: aiStats.sentiment_distribution.positive },
+        { name: "Negative", value: aiStats.sentiment_distribution.negative },
+        { name: "Neutral", value: aiStats.sentiment_distribution.neutral },
       ]
     : [];
 
@@ -232,31 +234,12 @@ export default function Analytics() {
       )}
 
       {/* Summary cards */}
-      {statistics && (
+      {statistics && aiStats && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <SummaryCard
-            title="Total Articles"
-            value={statistics.total_articles}
-            isDark={isDark}
-          />
-
-          <SummaryCard
-            title="News Sources"
-            value={statistics.total_sources}
-            isDark={isDark}
-          />
-
-          <SummaryCard
-            title="AI Analyzed"
-            value={statistics.ai_analysis.analyzed_articles}
-            isDark={isDark}
-          />
-
-          <SummaryCard
-            title="AI Coverage"
-            value={`${statistics.ai_analysis.coverage_percentage}%`}
-            isDark={isDark}
-          />
+          <SummaryCard title="Total Articles" value={statistics.total_articles} isDark={isDark} />
+          <SummaryCard title="News Sources" value={statistics.total_sources} isDark={isDark} />
+          <SummaryCard title={`${providerLabel} Analyzed`} value={aiStats.analyzed_articles} isDark={isDark} />
+          <SummaryCard title={`${providerLabel} Coverage`} value={`${aiStats.coverage_percentage}%`} isDark={isDark} />
         </div>
       )}
 
@@ -297,7 +280,7 @@ export default function Analytics() {
           </ResponsiveContainer>
         </ChartCard>
 
-        <ChartCard title="Articles by AI Category" isDark={isDark}>
+        <ChartCard title={`Articles by ${providerLabel} Category`} isDark={isDark}>
           <ResponsiveContainer width="100%" height={300}>
             <BarChart data={categories}>
               <CartesianGrid
@@ -338,7 +321,7 @@ export default function Analytics() {
       </div>
 
       {/* Sentiment chart */}
-      <ChartCard title="AI Sentiment Distribution" isDark={isDark}>
+      <ChartCard title={`${providerLabel} Sentiment Distribution`} isDark={isDark}>
         {sentimentData.every((item) => item.value === 0) ? (
           <EmptyState message="No AI sentiment data available yet." isDark={isDark} />
         ) : (

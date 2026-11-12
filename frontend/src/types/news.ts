@@ -1,9 +1,15 @@
-
 /**
  * Purpose:
- * Defines TypeScript types for news articles and dashboard
- * statistics returned by the FastAPI backend.
+ * TypeScript interfaces for the AI News Intelligence application.
+ *
+ * NewsArticle        — scraped article data only (no AI fields).
+ * AIAnalysis         — one analysis record from article_ai_analyses.
+ * NewsArticleWithAnalysis — article merged with its analysis for display.
  */
+
+// ---------------------------------------------------------------------------
+// Core article (scraping data only)
+// ---------------------------------------------------------------------------
 
 export interface NewsArticle {
   id: number;
@@ -11,11 +17,63 @@ export interface NewsArticle {
   source?: string;
   url?: string;
   published_at?: string | null;
+  category?: string | null;       // RSS feed category, not AI-assigned
+  description?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// AI analysis record (unified for both Gemini and ShubhAI)
+// ---------------------------------------------------------------------------
+
+export type AIModel = "gemini" | "shubhAI";
+export type AnalysisStatus = "pending" | "completed" | "failed";
+export type Sentiment = "positive" | "negative" | "neutral";
+
+export interface AIAnalysis {
+  id: number;
+  article_id: number;
+  ai_model: AIModel;
+  summary: string | null;
+  key_points: string[] | null;
+  category: string | null;
+  sentiment: Sentiment | null;
+  status: AnalysisStatus;
+  attempt_count: number;
+  error_message: string | null;
+  analyzed_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Article merged with analysis — used for display in News / AI Insights
+// ---------------------------------------------------------------------------
+
+export interface NewsArticleWithAnalysis extends NewsArticle {
   ai_summary?: string | null;
   ai_key_points?: string[] | null;
   ai_category?: string | null;
-  ai_sentiment?: "positive" | "negative" | "neutral" | null;
+  ai_sentiment?: Sentiment | null;
+  ai_model?: AIModel | null;
+  analysis_status?: AnalysisStatus | null;
 }
+
+// ---------------------------------------------------------------------------
+// Paginated response from /api/news/unified
+// ---------------------------------------------------------------------------
+
+export interface NewsPageResponse {
+  total: number;
+  limit: number;
+  offset: number;
+  items: NewsArticleWithAnalysis[];
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard statistics
+// ---------------------------------------------------------------------------
 
 export interface SourceStatistic {
   source: string;
@@ -29,6 +87,7 @@ export interface SentimentDistribution {
 }
 
 export interface AIAnalysisStatistics {
+  ai_model: AIModel;
   analyzed_articles: number;
   pending_articles: number;
   coverage_percentage: number;
@@ -42,11 +101,9 @@ export interface NewsStatistics {
   ai_analysis: AIAnalysisStatistics;
 }
 
-/**
- * Purpose:
- * Defines TypeScript types for category-wise and daily publishing
- * analytics data returned by the FastAPI backend.
- */
+// ---------------------------------------------------------------------------
+// Analytics
+// ---------------------------------------------------------------------------
 
 export interface CategoryStatistic {
   category: string;
@@ -58,13 +115,9 @@ export interface PublishingTrend {
   article_count: number;
 }
 
-
-
-/**
- * Purpose:
- * Defines TypeScript interfaces for ShubhAI (Ollama) article
- * analysis, pending articles, pagination and dashboard statistics.
- */
+// ---------------------------------------------------------------------------
+// ShubhAI (Ollama) specific response shapes from /api/ollama/*
+// ---------------------------------------------------------------------------
 
 export interface OllamaArticleAnalysis {
   summary: string;

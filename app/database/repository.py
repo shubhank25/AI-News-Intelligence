@@ -1,228 +1,101 @@
 """
 Purpose:
-This file provides database operations for news articles.
+Database repository for the AI News Intelligence application.
 
-It handles single and bulk article insertion, prevents duplicate
-records using PostgreSQL conflict handling, and provides methods
-to retrieve and count stored articles.
+All article queries operate on news_articles only.
+All AI analysis queries filter by ai_model ('gemini' or 'shubhAI').
+Pending status is calculated independently per AI model.
 """
 
-"""
-Purpose:
-These functions provide additional database read operations
-for retrieving individual news articles, available categories,
-and aggregated news statistics.
-"""
+from datetime import date, datetime, timezone
 
-from sqlalchemy import func, or_, select
-
-
-def get_article_by_id(
-    db: Session,
-    article_id: int,
-) -> NewsArticleModel | None:
-    """Retrieve a news article using its database ID."""
-
-    return db.get(NewsArticleModel, article_id)
-
-
-def get_categories(db: Session) -> list[str]:
-    """Return all distinct non-empty news categories."""
-
-    statement = (
-        select(NewsArticleModel.category)
-        .where(
-            NewsArticleModel.category.is_not(None),
-            NewsArticleModel.category != "",
-        )
-        .distinct()
-        .order_by(NewsArticleModel.category)
-    )
-
-    return list(db.execute(statement).scalars().all())
-
-
-"""
-Purpose:
-This function provides aggregated news intelligence statistics.
-
-It reports total articles, sources, AI analysis coverage,
-sentiment distribution, and article counts by source.
-"""
-
-
-"""
-Purpose:
-Returns overall news collection statistics and AI analysis metrics
-for the dashboard, including source and sentiment distributions.
-"""
-
-
-def get_news_statistics(db: Session) -> dict:
-    total_articles = count_articles(db)
-
-    analyzed_statement = select(func.count(NewsArticleModel.id)).where(
-        NewsArticleModel.ai_summary.is_not(None)
-    )
-
-    analyzed_articles = db.execute(analyzed_statement).scalar_one()
-    pending_articles = total_articles - analyzed_articles
-
-    sentiment_statement = (
-        select(
-            NewsArticleModel.ai_sentiment,
-            func.count(NewsArticleModel.id),
-        )
-        .where(NewsArticleModel.ai_sentiment.is_not(None))
-        .group_by(NewsArticleModel.ai_sentiment)
-    )
-
-    sentiment_rows = db.execute(sentiment_statement).all()
-
-    sentiment_distribution = {
-        "positive": 0,
-        "negative": 0,
-        "neutral": 0,
-    }
-
-    for sentiment, count in sentiment_rows:
-        if sentiment in sentiment_distribution:
-            sentiment_distribution[sentiment] = count
-
-    source_statement = (
-        select(
-            NewsArticleModel.source,
-            func.count(NewsArticleModel.id).label("article_count"),
-        )
-        .group_by(NewsArticleModel.source)
-        .order_by(func.count(NewsArticleModel.id).desc())
-    )
-
-    source_rows = db.execute(source_statement).all()
-
-    total_sources = len(source_rows)
-
-    coverage_percentage = (
-        (analyzed_articles / total_articles) * 100 if total_articles > 0 else 0
-    )
-
-    return {
-        "total_articles": total_articles,
-        "total_sources": total_sources,
-        "articles_by_source": [
-            {
-                "source": source,
-                "article_count": article_count,
-            }
-            for source, article_count in source_rows
-        ],
-        "ai_analysis": {
-            "analyzed_articles": analyzed_articles,
-            "pending_articles": pending_articles,
-            "coverage_percentage": round(coverage_percentage, 2),
-            "sentiment_distribution": sentiment_distribution,
-        },
-    }
-
-
-from datetime import date, datetime
-
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.database.models import NewsArticleModel
+from app.database.models import ArticleAIAnalysis, NewsArticleModel
 
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+AI_MODEL_GEMINI = "gemini"
+AI_MODEL_SHUBHAI = "shubhAI"
+MAX_ANALYSIS_ATTEMPTS = 3
+
+
+# ---------------------------------------------------------------------------
+# Article helpers
+# ---------------------------------------------------------------------------
 
 def prepare_article_data(article_data: dict) -> dict:
-    """Convert ISO-formatted datetime strings into datetime objects."""
-
-    prepared_data = article_data.copy()
-
+    """Convert ISO datetime strings to datetime objects."""
+    prepared = article_data.copy()
     for field in ("published_at", "fetched_at"):
-        value = prepared_data.get(field)
-
+        value = prepared.get(field)
         if isinstance(value, str):
-            prepared_data[field] = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            prepared[field] = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return prepared
 
-    return prepared_data
 
+# ---------------------------------------------------------------------------
+# Article writes
+# ---------------------------------------------------------------------------
 
-def create_article(
-    db: Session,
-    article_data: dict,
-) -> NewsArticleModel | None:
-    """Insert one article and return it, or None if it is a duplicate."""
-
-    prepared_data = prepare_article_data(article_data)
-
+def create_article(db: Session, article_data: dict) -> NewsArticleModel | None:
+    """Insert one article. Returns None if URL or content_hash already exists."""
+    prepared = prepare_article_data(article_data)
     try:
-        statement = (
+        stmt = (
             insert(NewsArticleModel)
-            .values(**prepared_data)
+            .values(**prepared)
             .on_conflict_do_nothing()
             .returning(NewsArticleModel.id)
         )
-
-        inserted_id = db.execute(statement).scalar_one_or_none()
+        inserted_id = db.execute(stmt).scalar_one_or_none()
         db.commit()
-
         if inserted_id is None:
             return None
-
         return db.get(NewsArticleModel, inserted_id)
-
     except SQLAlchemyError:
         db.rollback()
         raise
 
 
-def create_articles_bulk(
-    db: Session,
-    articles: list[dict],
-) -> int:
-    """
-    Insert multiple articles into PostgreSQL.
-
-    Returns the exact number of newly inserted records.
-    Duplicate URLs or content hashes are ignored.
-    """
-
+def create_articles_bulk(db: Session, articles: list[dict]) -> int:
+    """Bulk-insert articles. Returns count of newly inserted rows."""
     if not articles:
         return 0
-
-    prepared_articles = [prepare_article_data(article) for article in articles]
-
+    prepared = [prepare_article_data(a) for a in articles]
     try:
-        statement = (
+        stmt = (
             insert(NewsArticleModel)
-            .values(prepared_articles)
+            .values(prepared)
             .on_conflict_do_nothing()
             .returning(NewsArticleModel.id)
         )
-
-        result = db.execute(statement)
+        result = db.execute(stmt)
         inserted_ids = result.scalars().all()
-
         db.commit()
-
         return len(inserted_ids)
-
     except SQLAlchemyError:
         db.rollback()
         raise
 
 
-def get_article_by_url(
-    db: Session,
-    article_url: str,
-) -> NewsArticleModel | None:
-    """Retrieve an article using its URL."""
+# ---------------------------------------------------------------------------
+# Article reads
+# ---------------------------------------------------------------------------
 
-    statement = select(NewsArticleModel).where(NewsArticleModel.url == article_url)
+def get_article_by_id(db: Session, article_id: int) -> NewsArticleModel | None:
+    return db.get(NewsArticleModel, article_id)
 
-    return db.execute(statement).scalar_one_or_none()
+
+def get_article_by_url(db: Session, url: str) -> NewsArticleModel | None:
+    return db.execute(
+        select(NewsArticleModel).where(NewsArticleModel.url == url)
+    ).scalar_one_or_none()
 
 
 def get_articles(
@@ -231,60 +104,31 @@ def get_articles(
     offset: int = 0,
     category: str | None = None,
 ) -> list[NewsArticleModel]:
-    """Retrieve articles with pagination and optional category filtering."""
-
-    statement = select(NewsArticleModel)
-
+    """Paginated article list with optional RSS category filter."""
+    stmt = select(NewsArticleModel)
     if category:
-        statement = statement.where(NewsArticleModel.category.ilike(category))
-
-    statement = (
-        statement.order_by(
+        stmt = stmt.where(NewsArticleModel.category.ilike(category))
+    stmt = (
+        stmt.order_by(
             NewsArticleModel.published_at.desc().nulls_last(),
             NewsArticleModel.fetched_at.desc(),
         )
         .limit(limit)
         .offset(offset)
     )
+    return list(db.execute(stmt).scalars().all())
 
-    return list(db.execute(statement).scalars().all())
 
-
-def count_articles(
-    db: Session,
-    category: str | None = None,
-) -> int:
-    """Count all stored articles, optionally filtered by category."""
-
-    statement = select(func.count()).select_from(NewsArticleModel)
-
+def count_articles(db: Session, category: str | None = None) -> int:
+    stmt = select(func.count()).select_from(NewsArticleModel)
     if category:
-        statement = statement.where(NewsArticleModel.category.ilike(category))
-
-    return db.execute(statement).scalar_one()
-
-
-"""
-Purpose:
-These functions provide additional database read operations
-for retrieving individual news articles, available categories,
-and aggregated news statistics.
-"""
-
-
-def get_article_by_id(
-    db: Session,
-    article_id: int,
-) -> NewsArticleModel | None:
-    """Retrieve a news article using its database ID."""
-
-    return db.get(NewsArticleModel, article_id)
+        stmt = stmt.where(NewsArticleModel.category.ilike(category))
+    return db.execute(stmt).scalar_one()
 
 
 def get_categories(db: Session) -> list[str]:
-    """Return all distinct non-empty news categories."""
-
-    statement = (
+    """Distinct non-empty RSS feed categories."""
+    stmt = (
         select(NewsArticleModel.category)
         .where(
             NewsArticleModel.category.is_not(None),
@@ -293,35 +137,25 @@ def get_categories(db: Session) -> list[str]:
         .distinct()
         .order_by(NewsArticleModel.category)
     )
-
-    return list(db.execute(statement).scalars().all())
-
-
-"""
-Purpose:
-This function searches stored news articles using a keyword.
-
-It searches across article titles, descriptions, and full content
-using PostgreSQL case-insensitive matching.
-"""
+    return list(db.execute(stmt).scalars().all())
 
 
-def search_articles(
-    db: Session,
-    keyword: str,
-    limit: int = 20,
-) -> list[NewsArticleModel]:
-    """Search articles by keyword across title, description, and content."""
+def get_existing_article_urls(db: Session, urls: list[str]) -> set[str]:
+    if not urls:
+        return set()
+    stmt = select(NewsArticleModel.url).where(NewsArticleModel.url.in_(urls))
+    return set(db.execute(stmt).scalars().all())
 
-    search_pattern = f"%{keyword.strip()}%"
 
-    statement = (
+def search_articles(db: Session, keyword: str, limit: int = 20) -> list[NewsArticleModel]:
+    pattern = f"%{keyword.strip()}%"
+    stmt = (
         select(NewsArticleModel)
         .where(
             or_(
-                NewsArticleModel.title.ilike(search_pattern),
-                NewsArticleModel.description.ilike(search_pattern),
-                NewsArticleModel.content.ilike(search_pattern),
+                NewsArticleModel.title.ilike(pattern),
+                NewsArticleModel.description.ilike(pattern),
+                NewsArticleModel.content.ilike(pattern),
             )
         )
         .order_by(
@@ -330,52 +164,109 @@ def search_articles(
         )
         .limit(limit)
     )
-
-    return list(db.execute(statement).scalars().all())
-
-
-"""
-Purpose:
-This function identifies article URLs that already exist in PostgreSQL.
-
-It allows the news pipeline to skip previously collected articles
-before downloading and extracting their webpage content.
-"""
+    return list(db.execute(stmt).scalars().all())
 
 
-def get_existing_article_urls(
+# ---------------------------------------------------------------------------
+# AI analysis writes
+# ---------------------------------------------------------------------------
+
+def upsert_ai_analysis(
     db: Session,
-    article_urls: list[str],
-) -> set[str]:
-    """Return URLs that are already stored in the database."""
+    article_id: int,
+    ai_model: str,
+    analysis: dict | None = None,
+    status: str = "completed",
+    error_message: str | None = None,
+) -> ArticleAIAnalysis:
+    """
+    Insert or update one AI analysis record for (article_id, ai_model).
 
-    if not article_urls:
-        return set()
+    - status must be 'pending', 'completed', or 'failed'.
+    - ai_model must be 'gemini' or 'shubhAI'.
+    - Gemini and ShubhAI records are fully isolated.
+    """
+    if status not in {"pending", "completed", "failed"}:
+        raise ValueError(f"Invalid status: {status!r}")
+    if ai_model not in {AI_MODEL_GEMINI, AI_MODEL_SHUBHAI}:
+        raise ValueError(f"Invalid ai_model: {ai_model!r}")
 
-    statement = select(NewsArticleModel.url).where(
-        NewsArticleModel.url.in_(article_urls)
+    existing = db.execute(
+        select(ArticleAIAnalysis).where(
+            ArticleAIAnalysis.article_id == article_id,
+            ArticleAIAnalysis.ai_model == ai_model,
+        )
+    ).scalar_one_or_none()
+
+    if existing is None:
+        record = ArticleAIAnalysis(
+            article_id=article_id,
+            ai_model=ai_model,
+            attempt_count=1,
+        )
+        db.add(record)
+    else:
+        record = existing
+        record.attempt_count += 1
+
+    record.status = status
+    record.error_message = error_message[:2000] if error_message else None
+    record.updated_at = datetime.now(timezone.utc)
+
+    if status == "completed":
+        if not analysis:
+            raise ValueError("analysis dict is required for completed status.")
+        record.summary = analysis["summary"]
+        record.key_points = analysis["key_points"]
+        record.category = analysis["category"]
+        record.sentiment = analysis["sentiment"].lower()
+        record.analyzed_at = datetime.now(timezone.utc)
+        record.error_message = None
+    elif status == "failed":
+        record.analyzed_at = None
+
+    try:
+        db.commit()
+        db.refresh(record)
+        return record
+    except Exception:
+        db.rollback()
+        raise
+
+
+# ---------------------------------------------------------------------------
+# AI analysis reads — all filtered by ai_model
+# ---------------------------------------------------------------------------
+
+def _analysis_base_query(db: Session, ai_model: str):
+    """Base query joining news_articles with completed analysis for one model."""
+    return (
+        db.query(ArticleAIAnalysis, NewsArticleModel)
+        .join(NewsArticleModel, NewsArticleModel.id == ArticleAIAnalysis.article_id)
+        .filter(
+            ArticleAIAnalysis.ai_model == ai_model,
+            ArticleAIAnalysis.status == "completed",
+        )
     )
-
-    return set(db.execute(statement).scalars().all())
-
-
-"""
-Purpose:
-These repository functions retrieve news articles based on their
-Gemini AI analysis status and sentiment.
-"""
 
 
 def get_ai_analyzed_articles(
     db: Session,
+    ai_model: str,
     limit: int = 20,
     offset: int = 0,
-):
-    """Retrieve articles that have an AI-generated summary."""
-
-    statement = (
+) -> list[NewsArticleModel]:
+    """Articles with completed analysis for the given AI model."""
+    stmt = (
         select(NewsArticleModel)
-        .where(NewsArticleModel.ai_summary.is_not(None))
+        .join(
+            ArticleAIAnalysis,
+            and_(
+                ArticleAIAnalysis.article_id == NewsArticleModel.id,
+                ArticleAIAnalysis.ai_model == ai_model,
+                ArticleAIAnalysis.status == "completed",
+            ),
+        )
         .order_by(
             NewsArticleModel.published_at.desc().nulls_last(),
             NewsArticleModel.fetched_at.desc(),
@@ -383,159 +274,304 @@ def get_ai_analyzed_articles(
         .limit(limit)
         .offset(offset)
     )
+    return list(db.execute(stmt).scalars().all())
 
-    return db.scalars(statement).all()
+
+def count_ai_analyzed_articles(db: Session, ai_model: str) -> int:
+    return db.execute(
+        select(func.count(NewsArticleModel.id))
+        .select_from(NewsArticleModel)
+        .join(
+            ArticleAIAnalysis,
+            and_(
+                ArticleAIAnalysis.article_id == NewsArticleModel.id,
+                ArticleAIAnalysis.ai_model == ai_model,
+                ArticleAIAnalysis.status == "completed",
+            ),
+        )
+    ).scalar_one()
 
 
 def get_ai_pending_articles(
     db: Session,
+    ai_model: str,
     limit: int = 20,
     offset: int = 0,
-):
-    """Retrieve articles that do not yet have an AI summary."""
+) -> list[NewsArticleModel]:
+    """
+    Articles pending analysis for the given AI model.
 
-    statement = (
+    Pending = no analysis record OR failed with attempts < MAX_ANALYSIS_ATTEMPTS.
+    Articles without content are excluded.
+    """
+    stmt = (
         select(NewsArticleModel)
-        .where(NewsArticleModel.ai_summary.is_(None))
-        .order_by(NewsArticleModel.fetched_at.desc())
-        .limit(limit)
-        .offset(offset)
-    )
-
-    return db.scalars(statement).all()
-
-
-def get_articles_by_ai_sentiment(
-    db: Session,
-    sentiment: str,
-    limit: int = 20,
-    offset: int = 0,
-):
-    """Retrieve articles matching a specific AI sentiment."""
-
-    statement = (
-        select(NewsArticleModel)
-        .where(NewsArticleModel.ai_sentiment == sentiment)
-        .order_by(
-            NewsArticleModel.published_at.desc().nulls_last(),
-            NewsArticleModel.fetched_at.desc(),
+        .outerjoin(
+            ArticleAIAnalysis,
+            and_(
+                ArticleAIAnalysis.article_id == NewsArticleModel.id,
+                ArticleAIAnalysis.ai_model == ai_model,
+            ),
         )
+        .where(
+            NewsArticleModel.content.is_not(None),
+            func.trim(NewsArticleModel.content) != "",
+            or_(
+                ArticleAIAnalysis.id.is_(None),
+                and_(
+                    ArticleAIAnalysis.status == "failed",
+                    ArticleAIAnalysis.attempt_count < MAX_ANALYSIS_ATTEMPTS,
+                ),
+            ),
+        )
+        .order_by(NewsArticleModel.fetched_at.asc())
         .limit(limit)
         .offset(offset)
     )
-
-    return db.scalars(statement).all()
-
-
-"""
-Purpose:
-These functions retrieve Gemini-classified news categories
-and articles belonging to a selected AI category.
-"""
+    return list(db.execute(stmt).scalars().all())
 
 
-def get_ai_categories(db: Session) -> list[str]:
-    """Return distinct categories assigned by Gemini."""
-
-    statement = (
-        select(NewsArticleModel.ai_category)
+def count_ai_pending_articles(db: Session, ai_model: str) -> int:
+    stmt = (
+        select(func.count(NewsArticleModel.id))
+        .select_from(NewsArticleModel)
+        .outerjoin(
+            ArticleAIAnalysis,
+            and_(
+                ArticleAIAnalysis.article_id == NewsArticleModel.id,
+                ArticleAIAnalysis.ai_model == ai_model,
+            ),
+        )
         .where(
-            NewsArticleModel.ai_category.is_not(None),
-            NewsArticleModel.ai_category != "",
+            NewsArticleModel.content.is_not(None),
+            func.trim(NewsArticleModel.content) != "",
+            or_(
+                ArticleAIAnalysis.id.is_(None),
+                and_(
+                    ArticleAIAnalysis.status == "failed",
+                    ArticleAIAnalysis.attempt_count < MAX_ANALYSIS_ATTEMPTS,
+                ),
+            ),
+        )
+    )
+    return db.execute(stmt).scalar_one()
+
+
+def get_ai_categories(db: Session, ai_model: str) -> list[str]:
+    """Distinct categories assigned by the given AI model."""
+    stmt = (
+        select(ArticleAIAnalysis.category)
+        .where(
+            ArticleAIAnalysis.ai_model == ai_model,
+            ArticleAIAnalysis.status == "completed",
+            ArticleAIAnalysis.category.is_not(None),
+            func.trim(ArticleAIAnalysis.category) != "",
         )
         .distinct()
-        .order_by(NewsArticleModel.ai_category)
+        .order_by(ArticleAIAnalysis.category)
     )
+    return list(db.execute(stmt).scalars().all())
 
-    return list(db.execute(statement).scalars().all())
+
+def get_article_counts_by_ai_category(db: Session, ai_model: str) -> list[dict]:
+    """Article counts grouped by AI-assigned category for one model."""
+    stmt = (
+        select(
+            ArticleAIAnalysis.category.label("category"),
+            func.count(ArticleAIAnalysis.id).label("article_count"),
+        )
+        .where(
+            ArticleAIAnalysis.ai_model == ai_model,
+            ArticleAIAnalysis.status == "completed",
+            ArticleAIAnalysis.category.is_not(None),
+            func.trim(ArticleAIAnalysis.category) != "",
+        )
+        .group_by(ArticleAIAnalysis.category)
+        .order_by(func.count(ArticleAIAnalysis.id).desc())
+    )
+    return [
+        {"category": cat, "article_count": cnt}
+        for cat, cnt in db.execute(stmt).all()
+    ]
 
 
-def get_articles_by_ai_category(
+def get_analysis_for_article(
     db: Session,
-    category: str,
-    limit: int = 20,
-    offset: int = 0,
-):
-    """Retrieve articles filtered by their Gemini-assigned category."""
+    article_id: int,
+    ai_model: str,
+) -> ArticleAIAnalysis | None:
+    """Fetch the completed analysis record for one article and model."""
+    return db.execute(
+        select(ArticleAIAnalysis).where(
+            ArticleAIAnalysis.article_id == article_id,
+            ArticleAIAnalysis.ai_model == ai_model,
+            ArticleAIAnalysis.status == "completed",
+        )
+    ).scalar_one_or_none()
 
-    statement = (
-        select(NewsArticleModel)
-        .where(NewsArticleModel.ai_category.ilike(category))
-        .order_by(
+
+# ---------------------------------------------------------------------------
+# Unified All-News query (used by /api/news/unified)
+# ---------------------------------------------------------------------------
+
+def get_unified_articles(
+    db: Session,
+    limit: int = 10,
+    offset: int = 0,
+    search: str | None = None,
+    ai_category: str | None = None,
+    ai_sentiment: str | None = None,
+    ai_model: str | None = None,
+) -> dict:
+    """
+    Paginated article query for the All News page.
+
+    When ai_model is provided, JOINs with article_ai_analyses filtered
+    by that model. All filters are applied before LIMIT/OFFSET.
+    Returns {total, limit, offset, items}.
+    """
+    if ai_model:
+        base = (
+            select(NewsArticleModel)
+            .join(
+                ArticleAIAnalysis,
+                and_(
+                    ArticleAIAnalysis.article_id == NewsArticleModel.id,
+                    ArticleAIAnalysis.ai_model == ai_model,
+                    ArticleAIAnalysis.status == "completed",
+                ),
+            )
+        )
+        count_base = (
+            select(func.count(NewsArticleModel.id))
+            .select_from(NewsArticleModel)
+            .join(
+                ArticleAIAnalysis,
+                and_(
+                    ArticleAIAnalysis.article_id == NewsArticleModel.id,
+                    ArticleAIAnalysis.ai_model == ai_model,
+                    ArticleAIAnalysis.status == "completed",
+                ),
+            )
+        )
+    else:
+        base = select(NewsArticleModel)
+        count_base = select(func.count()).select_from(NewsArticleModel)
+
+    if search:
+        pattern = f"%{search.strip()}%"
+        sf = or_(
+            NewsArticleModel.title.ilike(pattern),
+            NewsArticleModel.description.ilike(pattern),
+            NewsArticleModel.content.ilike(pattern),
+        )
+        base = base.where(sf)
+        count_base = count_base.where(sf)
+
+    if ai_category and ai_model:
+        cf = func.lower(ArticleAIAnalysis.category) == ai_category.lower()
+        base = base.where(cf)
+        count_base = count_base.where(cf)
+
+    if ai_sentiment and ai_model:
+        sf2 = func.lower(ArticleAIAnalysis.sentiment) == ai_sentiment.lower()
+        base = base.where(sf2)
+        count_base = count_base.where(sf2)
+
+    total = db.execute(count_base).scalar_one()
+    items = db.execute(
+        base.order_by(
             NewsArticleModel.published_at.desc().nulls_last(),
             NewsArticleModel.fetched_at.desc(),
         )
         .limit(limit)
         .offset(offset)
-    )
+    ).scalars().all()
 
-    return db.scalars(statement).all()
+    return {"total": total, "limit": limit, "offset": offset, "items": list(items)}
 
 
-def get_article_counts_by_ai_category(db: Session) -> list[dict]:
+# ---------------------------------------------------------------------------
+# Statistics
+# ---------------------------------------------------------------------------
+
+def get_news_statistics(db: Session, ai_model: str = AI_MODEL_GEMINI) -> dict:
     """
-    Return article counts grouped by AI-generated category.
-
-    Articles without an AI category are excluded from this analysis.
+    Aggregated statistics for the dashboard.
+    AI analysis metrics are scoped to the given ai_model.
     """
+    total_articles = count_articles(db)
+    analyzed = count_ai_analyzed_articles(db, ai_model)
+    pending = count_ai_pending_articles(db, ai_model)
 
-    statement = (
+    sentiment_rows = db.execute(
         select(
-            NewsArticleModel.ai_category.label("category"),
-            func.count(NewsArticleModel.id).label("article_count"),
+            func.lower(ArticleAIAnalysis.sentiment),
+            func.count(ArticleAIAnalysis.id),
         )
         .where(
-            NewsArticleModel.ai_category.is_not(None),
-            func.trim(NewsArticleModel.ai_category) != "",
+            ArticleAIAnalysis.ai_model == ai_model,
+            ArticleAIAnalysis.status == "completed",
+            ArticleAIAnalysis.sentiment.is_not(None),
         )
-        .group_by(NewsArticleModel.ai_category)
+        .group_by(func.lower(ArticleAIAnalysis.sentiment))
+    ).all()
+
+    sentiment_distribution = {"positive": 0, "negative": 0, "neutral": 0}
+    for sentiment, cnt in sentiment_rows:
+        if sentiment in sentiment_distribution:
+            sentiment_distribution[sentiment] = cnt
+
+    source_rows = db.execute(
+        select(
+            NewsArticleModel.source,
+            func.count(NewsArticleModel.id).label("article_count"),
+        )
+        .group_by(NewsArticleModel.source)
         .order_by(func.count(NewsArticleModel.id).desc())
-    )
+    ).all()
 
-    results = db.execute(statement).all()
+    coverage = (analyzed / total_articles * 100) if total_articles > 0 else 0.0
 
-    return [
-        {
-            "category": category,
-            "article_count": article_count,
-        }
-        for category, article_count in results
-    ]
+    return {
+        "total_articles": total_articles,
+        "total_sources": len(source_rows),
+        "articles_by_source": [
+            {"source": s, "article_count": c} for s, c in source_rows
+        ],
+        "ai_analysis": {
+            "ai_model": ai_model,
+            "analyzed_articles": analyzed,
+            "pending_articles": pending,
+            "coverage_percentage": round(coverage, 2),
+            "sentiment_distribution": sentiment_distribution,
+        },
+    }
 
+
+# ---------------------------------------------------------------------------
+# Analytics
+# ---------------------------------------------------------------------------
 
 def get_daily_publishing_trends(
     db: Session,
     date_from: date | None = None,
     date_to: date | None = None,
 ) -> list[dict]:
-    """
-    Return daily article publication counts.
-
-    Optional date_from and date_to filters restrict the reporting period.
-    Articles without a publication date are excluded.
-    """
-
     published_date = func.date(NewsArticleModel.published_at)
-
-    statement = select(
+    stmt = select(
         published_date.label("published_date"),
         func.count(NewsArticleModel.id).label("article_count"),
     ).where(NewsArticleModel.published_at.is_not(None))
 
     if date_from:
-        statement = statement.where(published_date >= date_from)
-
+        stmt = stmt.where(published_date >= date_from)
     if date_to:
-        statement = statement.where(published_date <= date_to)
+        stmt = stmt.where(published_date <= date_to)
 
-    statement = statement.group_by(published_date).order_by(published_date.asc())
-
-    results = db.execute(statement).all()
+    stmt = stmt.group_by(published_date).order_by(published_date.asc())
 
     return [
-        {
-            "date": published_date.isoformat(),
-            "article_count": article_count,
-        }
-        for published_date, article_count in results
+        {"date": pd.isoformat(), "article_count": cnt}
+        for pd, cnt in db.execute(stmt).all()
     ]

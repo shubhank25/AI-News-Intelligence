@@ -12,6 +12,8 @@ from app.ollama.repository import (
     get_pending_ollama_articles,
     save_ollama_analysis,
 )
+# save_ollama_analysis and get_pending_ollama_articles now delegate
+# to the unified repository with ai_model='shubhAI'.
 from app.services.ollama_service import analyze_article
 
 logger = logging.getLogger(__name__)

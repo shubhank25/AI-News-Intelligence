@@ -17,6 +17,7 @@ import AIInsights from "./pages/AIInsights";
 import Analytics from "./pages/Analytics";
 
 import { ThemeProvider, useTheme } from "./context/ThemeContext";
+import { AIModelProvider } from "./context/AIModelContext";
 
 import { useEffect } from "react";
 import { useLocation } from "react-router-dom";
@@ -67,9 +68,11 @@ function AppLayout() {
 function App() {
   return (
     <ThemeProvider>
-      <BrowserRouter>
-        <AppLayout />
-      </BrowserRouter>
+      <AIModelProvider>
+        <BrowserRouter>
+          <AppLayout />
+        </BrowserRouter>
+      </AIModelProvider>
     </ThemeProvider>
   );
 }
