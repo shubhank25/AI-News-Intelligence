@@ -200,7 +200,7 @@ GEMINI_API_KEY=your_gemini_api_key
 GEMINI_MODEL=gemini-2.0-flash
 
 # ShubhAI (Ollama — local or Docker)
-OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_BASE_URL=http://host.docker.internal:11434  # Docker backend -> Ollama on Windows host
 OLLAMA_MODEL=qwen3:4b
 OLLAMA_TIMEOUT=120
 ```
@@ -238,7 +238,7 @@ Done. Tables created:
   + article_ai_analyses
 ```
 
-> Re-run `python init_db.py` after any change to `app/database/models.py`.
+> `init_db.py` / SQLAlchemy `create_all()` creates missing tables only; it does not alter existing columns or constraints. Use a versioned Alembic migration for schema changes. Back up the Neon database before applying migrations.
 
 ### 4️⃣ ShubhAI (Ollama) — optional
 

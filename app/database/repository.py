@@ -9,7 +9,7 @@ Pending status is calculated independently per AI model.
 
 from datetime import date, datetime, timezone
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, literal, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -180,54 +180,81 @@ def upsert_ai_analysis(
     error_message: str | None = None,
 ) -> ArticleAIAnalysis:
     """
-    Insert or update one AI analysis record for (article_id, ai_model).
+    Atomically insert/update one analysis for an article and AI model.
 
-    - status must be 'pending', 'completed', or 'failed'.
-    - ai_model must be 'gemini' or 'shubhAI'.
-    - Gemini and ShubhAI records are fully isolated.
+    The unique (article_id, ai_model) constraint protects concurrent workers.
+    attempt_count increases only when a completed/failed inference result is saved.
     """
     if status not in {"pending", "completed", "failed"}:
         raise ValueError(f"Invalid status: {status!r}")
     if ai_model not in {AI_MODEL_GEMINI, AI_MODEL_SHUBHAI}:
         raise ValueError(f"Invalid ai_model: {ai_model!r}")
+    if status == "completed" and not isinstance(analysis, dict):
+        raise ValueError("analysis dict is required for completed status.")
 
-    existing = db.execute(
-        select(ArticleAIAnalysis).where(
-            ArticleAIAnalysis.article_id == article_id,
-            ArticleAIAnalysis.ai_model == ai_model,
-        )
-    ).scalar_one_or_none()
-
-    if existing is None:
-        record = ArticleAIAnalysis(
-            article_id=article_id,
-            ai_model=ai_model,
-            attempt_count=1,
-        )
-        db.add(record)
-    else:
-        record = existing
-        record.attempt_count += 1
-
-    record.status = status
-    record.error_message = error_message[:2000] if error_message else None
-    record.updated_at = datetime.now(timezone.utc)
+    values = {
+        "article_id": article_id,
+        "ai_model": ai_model,
+        "status": status,
+        "error_message": error_message[:2000] if error_message else None,
+        "updated_at": datetime.now(timezone.utc),
+    }
+    if status in {"completed", "failed"}:
+        values["attempt_count"] = 1
 
     if status == "completed":
-        if not analysis:
-            raise ValueError("analysis dict is required for completed status.")
-        record.summary = analysis["summary"]
-        record.key_points = analysis["key_points"]
-        record.category = analysis["category"]
-        record.sentiment = analysis["sentiment"].lower()
-        record.analyzed_at = datetime.now(timezone.utc)
-        record.error_message = None
+        required = {"summary", "key_points", "category", "sentiment"}
+        missing = required.difference(analysis or {})
+        if missing:
+            raise ValueError(f"Analysis is missing required fields: {sorted(missing)}")
+        sentiment = str(analysis["sentiment"]).strip().lower()
+        if sentiment not in {"positive", "negative", "neutral"}:
+            raise ValueError(f"Invalid sentiment: {sentiment!r}")
+        values.update({
+            "summary": analysis["summary"],
+            "key_points": analysis["key_points"],
+            "category": analysis["category"],
+            "sentiment": sentiment,
+            "analyzed_at": datetime.now(timezone.utc),
+            "error_message": None,
+        })
     elif status == "failed":
-        record.analyzed_at = None
+        values["analyzed_at"] = None
+
+    insert_stmt = insert(ArticleAIAnalysis).values(**values)
+    update_values = {
+        "status": insert_stmt.excluded.status,
+        "error_message": insert_stmt.excluded.error_message,
+        "updated_at": insert_stmt.excluded.updated_at,
+    }
+    if status in {"completed", "failed"}:
+        update_values["attempt_count"] = ArticleAIAnalysis.attempt_count + 1
+    if status == "completed":
+        update_values.update({
+            "summary": insert_stmt.excluded.summary,
+            "key_points": insert_stmt.excluded.key_points,
+            "category": insert_stmt.excluded.category,
+            "sentiment": insert_stmt.excluded.sentiment,
+            "analyzed_at": insert_stmt.excluded.analyzed_at,
+            "error_message": None,
+        })
+    elif status == "failed":
+        update_values["analyzed_at"] = None
+
+    stmt = (
+        insert_stmt.on_conflict_do_update(
+            constraint="uq_analyses_article_model",
+            set_=update_values,
+        )
+        .returning(ArticleAIAnalysis.id)
+    )
 
     try:
+        record_id = db.execute(stmt).scalar_one()
         db.commit()
-        db.refresh(record)
+        record = db.get(ArticleAIAnalysis, record_id)
+        if record is None:
+            raise RuntimeError("Analysis upsert succeeded but the row could not be reloaded.")
         return record
     except Exception:
         db.rollback()
@@ -318,6 +345,7 @@ def get_ai_pending_articles(
             func.trim(NewsArticleModel.content) != "",
             or_(
                 ArticleAIAnalysis.id.is_(None),
+                ArticleAIAnalysis.status == "pending",
                 and_(
                     ArticleAIAnalysis.status == "failed",
                     ArticleAIAnalysis.attempt_count < MAX_ANALYSIS_ATTEMPTS,
@@ -347,6 +375,7 @@ def count_ai_pending_articles(db: Session, ai_model: str) -> int:
             func.trim(NewsArticleModel.content) != "",
             or_(
                 ArticleAIAnalysis.id.is_(None),
+                ArticleAIAnalysis.status == "pending",
                 and_(
                     ArticleAIAnalysis.status == "failed",
                     ArticleAIAnalysis.attempt_count < MAX_ANALYSIS_ATTEMPTS,
@@ -424,71 +453,66 @@ def get_unified_articles(
     ai_model: str | None = None,
 ) -> dict:
     """
-    Paginated article query for the All News page.
-
-    When ai_model is provided, JOINs with article_ai_analyses filtered
-    by that model. All filters are applied before LIMIT/OFFSET.
-    Returns {total, limit, offset, items}.
+    Return every scraped article, optionally enriched with the selected
+    model's analysis. Missing/pending/failed analyses never hide an article.
+    AI category/sentiment filters intentionally narrow results only when set.
     """
-    if ai_model:
-        base = (
-            select(NewsArticleModel)
-            .join(
-                ArticleAIAnalysis,
-                and_(
-                    ArticleAIAnalysis.article_id == NewsArticleModel.id,
-                    ArticleAIAnalysis.ai_model == ai_model,
-                    ArticleAIAnalysis.status == "completed",
-                ),
-            )
-        )
-        count_base = (
-            select(func.count(NewsArticleModel.id))
-            .select_from(NewsArticleModel)
-            .join(
-                ArticleAIAnalysis,
-                and_(
-                    ArticleAIAnalysis.article_id == NewsArticleModel.id,
-                    ArticleAIAnalysis.ai_model == ai_model,
-                    ArticleAIAnalysis.status == "completed",
-                ),
-            )
-        )
-    else:
-        base = select(NewsArticleModel)
-        count_base = select(func.count()).select_from(NewsArticleModel)
+    if ai_model and ai_model not in {AI_MODEL_GEMINI, AI_MODEL_SHUBHAI}:
+        raise ValueError(f"Invalid ai_model: {ai_model!r}")
 
-    if search:
+    join_condition = and_(
+        ArticleAIAnalysis.article_id == NewsArticleModel.id,
+        ArticleAIAnalysis.ai_model == ai_model,
+    )
+    base = select(NewsArticleModel, ArticleAIAnalysis).outerjoin(
+        ArticleAIAnalysis, join_condition
+    ) if ai_model else select(NewsArticleModel, literal(None))
+
+    count_base = select(func.count(func.distinct(NewsArticleModel.id))).select_from(
+        NewsArticleModel
+    )
+    if ai_model:
+        count_base = count_base.outerjoin(ArticleAIAnalysis, join_condition)
+
+    filters = []
+    if search and search.strip():
         pattern = f"%{search.strip()}%"
-        sf = or_(
+        filters.append(or_(
             NewsArticleModel.title.ilike(pattern),
             NewsArticleModel.description.ilike(pattern),
             NewsArticleModel.content.ilike(pattern),
-        )
-        base = base.where(sf)
-        count_base = count_base.where(sf)
-
+        ))
     if ai_category and ai_model:
-        cf = func.lower(ArticleAIAnalysis.category) == ai_category.lower()
-        base = base.where(cf)
-        count_base = count_base.where(cf)
-
+        filters.append(func.lower(ArticleAIAnalysis.category) == ai_category.strip().lower())
     if ai_sentiment and ai_model:
-        sf2 = func.lower(ArticleAIAnalysis.sentiment) == ai_sentiment.lower()
-        base = base.where(sf2)
-        count_base = count_base.where(sf2)
+        filters.append(func.lower(ArticleAIAnalysis.sentiment) == ai_sentiment.strip().lower())
+
+    if filters:
+        base = base.where(*filters)
+        count_base = count_base.where(*filters)
 
     total = db.execute(count_base).scalar_one()
-    items = db.execute(
+    rows = db.execute(
         base.order_by(
             NewsArticleModel.published_at.desc().nulls_last(),
             NewsArticleModel.fetched_at.desc(),
-        )
-        .limit(limit)
-        .offset(offset)
-    ).scalars().all()
+        ).limit(limit).offset(offset)
+    ).all()
 
-    return {"total": total, "limit": limit, "offset": offset, "items": list(items)}
+    items = []
+    for article, analysis in rows:
+        completed = analysis is not None and analysis.status == "completed"
+        # Attach display-only fields to the ORM instance so existing callers
+        # and tests can continue using article.id / article.title.
+        article.ai_summary = analysis.summary if completed else None
+        article.ai_key_points = analysis.key_points if completed else None
+        article.ai_category = analysis.category if completed else None
+        article.ai_sentiment = analysis.sentiment if completed else None
+        article.ai_model = ai_model
+        article.analysis_status = analysis.status if analysis else "pending"
+        items.append(article)
+
+    return {"total": total, "limit": limit, "offset": offset, "items": items}
 
 
 # ---------------------------------------------------------------------------

@@ -254,11 +254,15 @@ export default function News() {
                   </span>
                 )}
 
-                {!article.ai_summary && (
+                {article.analysis_status === "failed" ? (
+                  <span className="rounded-full bg-red-500/15 px-3 py-1 text-red-600">
+                    Failed
+                  </span>
+                ) : !article.ai_summary ? (
                   <span className="rounded-full bg-amber-500/15 px-3 py-1 text-amber-600">
                     Pending
                   </span>
-                )}
+                ) : null}
               </div>
 
               <h2 className={`text-lg font-semibold ${styles.articleTitle}`}>
