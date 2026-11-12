@@ -13,6 +13,13 @@ import type {
   PublishingTrend,
 } from "../types/news";
 
+import type {
+  OllamaAnalysisListResponse,
+  OllamaAnalysisStatus,
+  OllamaAnalyzedArticle,
+  OllamaPendingListResponse,
+} from "../types/news";
+
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || "/api",
   timeout: 120000,
@@ -172,5 +179,62 @@ export const getPublishingTrends = async (
   return response.data;
 };
 
-export default api;
 
+/**
+ * Purpose:
+ * Retrieves Ollama-generated article analyses and processing status.
+ * These endpoints are separate from the existing Gemini APIs.
+ */
+
+export const getOllamaAnalyses = async (
+  limit = 10,
+  offset = 0,
+): Promise<OllamaAnalysisListResponse> => {
+  const response = await api.get<OllamaAnalysisListResponse>(
+    "/ollama/analyses",
+    {
+      params: { limit, offset },
+    },
+  );
+
+  return response.data;
+};
+
+export const getOllamaAnalysisByArticle = async (
+  articleId: number,
+): Promise<OllamaAnalyzedArticle> => {
+  const response = await api.get<OllamaAnalyzedArticle>(
+    `/ollama/analyses/${articleId}`,
+  );
+
+  return response.data;
+};
+
+export const getOllamaAnalysisStatus =
+  async (): Promise<OllamaAnalysisStatus> => {
+    const response = await api.get<OllamaAnalysisStatus>(
+      "/ollama/status",
+    );
+
+    return response.data;
+  };
+
+/**
+* Purpose:
+* Retrieves pending articles waiting for ShubhAI analysis.
+*/
+export const getOllamaPendingArticles = async (
+  limit = 10,
+  offset = 0,
+): Promise<OllamaPendingListResponse> => {
+  const response = await api.get<OllamaPendingListResponse>(
+    "/ollama/pending",
+    {
+      params: { limit, offset },
+    },
+  );
+
+  return response.data;
+};
+
+export default api;

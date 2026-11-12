@@ -6,7 +6,7 @@
  * Uses ThemeContext for consistent light and dark theme styling.
  */
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   ResponsiveContainer,
   PieChart,
@@ -28,6 +28,7 @@ import type {
 } from "../types/news";
 
 import { useTheme } from "../context/ThemeContext";
+import OllamaInsights from "../components/OllamaInsights";
 
 type ArticleTab = "analyzed" | "pending";
 
@@ -37,7 +38,7 @@ const SENTIMENT_COLORS: Record<string, string> = {
   neutral: "#94a3b8",
 };
 
-export default function AIInsights() {
+function GeminiInsights() {
   const { theme } = useTheme();
   const isDark = theme === "dark";
 
@@ -47,6 +48,7 @@ export default function AIInsights() {
   const [activeTab, setActiveTab] = useState<ArticleTab>("analyzed");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
 
   const colors = {
     heading: isDark ? "text-white" : "text-slate-900",
@@ -63,47 +65,32 @@ export default function AIInsights() {
       : "bg-slate-100 text-slate-600 hover:bg-slate-200",
   };
 
-  useEffect(() => {
-    let active = true;
+  const loadDashboard = useCallback(async () => {
+    try {
+      setRefreshing(true);
+      setError("");
 
-    async function loadDashboard() {
-      try {
-        setLoading(true);
-        setError("");
+      const [stats, analyzed, pending] = await Promise.all([
+        getNewsStatistics(),
+        getAIAnalyzedArticles(10, 0),
+        getAIPendingArticles(10, 0),
+      ]);
 
-        const [stats, analyzed, pending] = await Promise.all([
-          getNewsStatistics(),
-          getAIAnalyzedArticles(10, 0),
-          getAIPendingArticles(10, 0),
-        ]);
-
-        if (active) {
-          setStatistics(stats);
-          setAnalyzedArticles(analyzed);
-          setPendingArticles(pending);
-        }
-      } catch (err) {
-        console.error("AI Insights loading failed:", err);
-
-        if (active) {
-          setError(
-            "Unable to load AI insights. Please check the backend APIs."
-          );
-        }
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
+      setStatistics(stats);
+      setAnalyzedArticles(analyzed);
+      setPendingArticles(pending);
+    } catch (err) {
+      console.error("AI Insights loading failed:", err);
+      setError("Unable to load AI insights. Please check the backend APIs.");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
     }
-
-    loadDashboard();
-
-    return () => {
-      active = false;
-    };
   }, []);
 
+  useEffect(() => {
+    void loadDashboard();
+  }, [loadDashboard]);
   if (loading) {
     return (
       <div className={`py-16 text-center ${colors.text}`}>
@@ -115,11 +102,10 @@ export default function AIInsights() {
   if (error || !statistics) {
     return (
       <div
-        className={`rounded-xl border p-5 ${
-          isDark
-            ? "border-red-900 bg-red-950/30 text-red-300"
-            : "border-red-200 bg-red-50 text-red-700"
-        }`}
+        className={`rounded-xl border p-5 ${isDark
+          ? "border-red-900 bg-red-950/30 text-red-300"
+          : "border-red-200 bg-red-50 text-red-700"
+          }`}
       >
         {error || "Statistics are unavailable."}
       </div>
@@ -215,9 +201,8 @@ export default function AIInsights() {
           </div>
 
           <div
-            className={`mt-4 h-3 overflow-hidden rounded-full ${
-              isDark ? "bg-slate-700" : "bg-slate-200"
-            }`}
+            className={`mt-4 h-3 overflow-hidden rounded-full ${isDark ? "bg-slate-700" : "bg-slate-200"
+              }`}
           >
             <div
               className="h-full rounded-full bg-blue-600 transition-all duration-500"
@@ -296,30 +281,42 @@ export default function AIInsights() {
             AI Article Analysis
           </h2>
 
-          <div className="flex gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={() => setActiveTab("analyzed")}
-              className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
-                activeTab === "analyzed"
-                  ? "bg-blue-600 text-white"
-                  : colors.inactiveTab
-              }`}
+              onClick={() => void loadDashboard()}
+              disabled={refreshing}
+              className={`rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${isDark
+                ? "border-slate-700 text-blue-400 hover:bg-slate-800"
+                : "border-slate-300 text-blue-600 hover:bg-slate-100"
+                } disabled:cursor-not-allowed disabled:opacity-60`}
             >
-              Analyzed ({aiStats.analyzed_articles})
+              {refreshing ? "Refreshing..." : "↻ Refresh"}
             </button>
 
-            <button
-              type="button"
-              onClick={() => setActiveTab("pending")}
-              className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
-                activeTab === "pending"
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setActiveTab("analyzed")}
+                className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${activeTab === "analyzed"
                   ? "bg-blue-600 text-white"
                   : colors.inactiveTab
-              }`}
-            >
-              Pending ({aiStats.pending_articles})
-            </button>
+                  }`}
+              >
+                Analyzed ({aiStats.analyzed_articles})
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab("pending")}
+                className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${activeTab === "pending"
+                  ? "bg-blue-600 text-white"
+                  : colors.inactiveTab
+                  }`}
+              >
+                Pending ({aiStats.pending_articles})
+              </button>
+            </div>
           </div>
         </div>
 
@@ -344,11 +341,10 @@ export default function AIInsights() {
 
                 {article.ai_category && (
                   <span
-                    className={`rounded-full px-3 py-1 text-xs font-medium ${
-                      isDark
-                        ? "bg-blue-500/15 text-blue-300"
-                        : "bg-blue-100 text-blue-700"
-                    }`}
+                    className={`rounded-full px-3 py-1 text-xs font-medium ${isDark
+                      ? "bg-blue-500/15 text-blue-300"
+                      : "bg-blue-100 text-blue-700"
+                      }`}
                   >
                     {article.ai_category}
                   </span>
@@ -356,11 +352,10 @@ export default function AIInsights() {
 
                 {article.ai_sentiment && (
                   <span
-                    className={`rounded-full px-3 py-1 text-xs capitalize ${
-                      isDark
-                        ? "bg-slate-700 text-slate-200"
-                        : "bg-slate-200 text-slate-700"
-                    }`}
+                    className={`rounded-full px-3 py-1 text-xs capitalize ${isDark
+                      ? "bg-slate-700 text-slate-200"
+                      : "bg-slate-200 text-slate-700"
+                      }`}
                   >
                     {article.ai_sentiment}
                   </span>
@@ -390,11 +385,10 @@ export default function AIInsights() {
                   href={article.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className={`mt-3 inline-block text-sm font-medium ${
-                    isDark
-                      ? "text-blue-400 hover:text-blue-300"
-                      : "text-blue-600 hover:text-blue-700"
-                  }`}
+                  className={`mt-3 inline-block text-sm font-medium ${isDark
+                    ? "text-blue-400 hover:text-blue-300"
+                    : "text-blue-600 hover:text-blue-700"
+                    }`}
                 >
                   Read original article →
                 </a>
@@ -425,35 +419,105 @@ function StatCard({
 }) {
   return (
     <div
-      className={`rounded-xl border p-5 shadow-sm transition-colors ${
-        isDark
-          ? "border-slate-800 bg-slate-900"
-          : "border-slate-200 bg-white"
-      }`}
+      className={`rounded-xl border p-5 shadow-sm transition-colors ${isDark
+        ? "border-slate-800 bg-slate-900"
+        : "border-slate-200 bg-white"
+        }`}
     >
       <p
-        className={`text-sm font-medium ${
-          isDark ? "text-slate-400" : "text-slate-500"
-        }`}
+        className={`text-sm font-medium ${isDark ? "text-slate-400" : "text-slate-500"
+          }`}
       >
         {title}
       </p>
 
       <p
-        className={`mt-3 text-3xl font-bold ${
-          isDark ? "text-white" : "text-slate-900"
-        }`}
+        className={`mt-3 text-3xl font-bold ${isDark ? "text-white" : "text-slate-900"
+          }`}
       >
         {value}
       </p>
 
       <p
-        className={`mt-2 text-xs ${
-          isDark ? "text-slate-500" : "text-slate-500"
-        }`}
+        className={`mt-2 text-xs ${isDark ? "text-slate-500" : "text-slate-500"
+          }`}
       >
         {description}
       </p>
+    </div>
+  );
+}
+
+/**
+ * Purpose:
+ * Provides a unified AI Insights dashboard with separate
+ * ShubhAI (local Ollama) and Gemini analysis views.
+ */
+
+type AIProvider = "shubhAI" | "gemini";
+
+export default function AIInsights() {
+  const [activeAI, setActiveAI] = useState<AIProvider>("shubhAI");
+
+  const { theme } = useTheme();
+  const isDark = theme === "dark";
+
+  const buttonClass = (provider: AIProvider) =>
+    `rounded-lg px-5 py-3 text-sm font-semibold transition-colors ${activeAI === provider
+      ? "bg-[var(--color-indigo-600)] text-white shadow-sm"
+      : isDark
+        ? "bg-slate-800 text-slate-300 hover:bg-slate-700"
+        : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+    }`;
+
+  return (
+    <div className="space-y-6">
+      <section
+        className={`rounded-xl border p-5 shadow-sm ${isDark
+          ? "border-slate-800 bg-slate-900"
+          : "border-slate-200 bg-white"
+          }`}
+      >
+        <h1 className={`text-2xl font-bold ${isDark ? "text-white" : "text-slate-900"
+          }`}>
+          AI Insights
+        </h1>
+
+        <p className={`mt-1 text-sm ${isDark ? "text-slate-400" : "text-slate-500"
+          }`}>
+          Select an AI engine to view its news analysis and statistics.
+        </p>
+
+        <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => setActiveAI("shubhAI")}
+            className={buttonClass("shubhAI")}
+          >
+            ShubhAI Analysis
+            <span className="mt-1 block text-xs font-normal opacity-80">
+              Local Ollama LLM
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveAI("gemini")}
+            className={buttonClass("gemini")}
+          >
+            Gemini Analysis
+            <span className="mt-1 block text-xs font-normal opacity-80">
+              Google Gemini AI
+            </span>
+          </button>
+        </div>
+      </section>
+
+      {activeAI === "shubhAI" ? (
+        <OllamaInsights />
+      ) : (
+        <GeminiInsights />
+      )}
     </div>
   );
 }

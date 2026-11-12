@@ -19,6 +19,9 @@ RUN pip install --no-cache-dir --upgrade pip \
 # Copy backend application code.
 COPY app/ ./app/
 
+# Copy automated test files.
+COPY tests/ ./tests/
+
 # Create directories for application data and logs.
 RUN mkdir -p data logs
 

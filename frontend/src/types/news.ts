@@ -57,3 +57,66 @@ export interface PublishingTrend {
   date: string;
   article_count: number;
 }
+
+
+
+/**
+ * Purpose:
+ * Defines TypeScript interfaces for ShubhAI (Ollama) article
+ * analysis, pending articles, pagination and dashboard statistics.
+ */
+
+export interface OllamaArticleAnalysis {
+  summary: string;
+  key_points: string[];
+  category: string;
+  sentiment: string;
+  status: "completed" | "failed";
+  attempt_count: number;
+  analyzed_at: string | null;
+}
+
+export interface OllamaAnalyzedArticle {
+  article_id: number;
+  title: string;
+  url: string | null;
+  source: string | null;
+  analysis: OllamaArticleAnalysis;
+}
+
+export interface OllamaPendingArticle {
+  article_id: number;
+  title: string;
+  url: string | null;
+  source: string | null;
+}
+
+export interface OllamaAnalysisListResponse {
+  total: number;
+  limit: number;
+  offset: number;
+  items: OllamaAnalyzedArticle[];
+}
+
+export interface OllamaPendingListResponse {
+  total: number;
+  limit: number;
+  offset: number;
+  items: OllamaPendingArticle[];
+}
+
+export interface OllamaSentimentDistribution {
+  positive: number;
+  negative: number;
+  neutral: number;
+}
+
+export interface OllamaAnalysisStatus {
+  total_articles: number;
+  analyzed_articles: number;
+  completed: number;
+  pending: number;
+  failed: number;
+  coverage_percentage: number;
+  sentiment_distribution: OllamaSentimentDistribution;
+}

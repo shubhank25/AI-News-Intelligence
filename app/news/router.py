@@ -28,7 +28,11 @@ from app.database.repository import (
     get_news_statistics,
     search_articles,
 )
-from app.news.pipeline import run_news_pipeline, run_scraping_pipeline, run_ai_analysis_pipeline
+from app.news.pipeline import (
+    run_ai_analysis_pipeline,
+    run_news_pipeline,
+    run_scraping_pipeline,
+)
 from app.news.schemas import NewsArticleResponse
 
 router = APIRouter(

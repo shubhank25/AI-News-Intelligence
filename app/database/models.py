@@ -7,11 +7,12 @@ to PostgreSQL columns, including summaries, key points, categories,
 and sentiment.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     JSON,
     DateTime,
+    ForeignKey,
     Integer,
     String,
     Text,
@@ -125,3 +126,78 @@ class NewsArticleModel(Base):
             f"title={self.title!r}, "
             f"source={self.source!r})"
         )
+
+
+"""
+Purpose:
+Store Ollama-generated news analysis separately from Gemini analysis.
+Each news article can have one Ollama analysis record.
+"""
+
+
+class OllamaArticleAnalysis(Base):
+    """Database model for locally generated Ollama news analysis."""
+
+    __tablename__ = "article_ai_analyses"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
+
+    article_id: Mapped[int] = mapped_column(
+        ForeignKey("news_articles.id", ondelete="CASCADE"),
+        unique=True,
+        nullable=False,
+        index=True,
+    )
+
+    summary: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    key_points: Mapped[list[str] | None] = mapped_column(
+        JSON,
+        nullable=True,
+    )
+
+    category: Mapped[str | None] = mapped_column(
+        String(150),
+        nullable=True,
+    )
+
+    sentiment: Mapped[str | None] = mapped_column(
+        String(20),
+        nullable=True,
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(20),
+        default="completed",
+        nullable=False,
+        index=True,
+    )
+
+    error_message: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    attempt_count: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        nullable=False,
+    )
+
+    analyzed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
