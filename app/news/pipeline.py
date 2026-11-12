@@ -24,6 +24,8 @@ from app.database.repository import (
     create_articles_bulk,
     get_ai_pending_articles,
     get_existing_article_urls,
+    upsert_ai_analysis,
+    AI_MODEL_GEMINI,
 )
 from app.news.cleaner import clean_article_text
 from app.news.config import MAX_ARTICLES_PER_RUN, RAW_DATA_DIR
@@ -121,16 +123,12 @@ def scrape_article(article) -> Optional[dict]:
 
     article.content = cleaned_content
     article.content_hash = generate_content_hash(cleaned_content)
-    article.ai_summary = None
-    article.ai_key_points = None
-    article.ai_category = None
-    article.ai_sentiment = None
 
     return article.model_dump(mode="json")
 
 
 def process_article(article) -> Optional[dict]:
-    """Download, extract, clean, and analyze one article."""
+    """Download, extract, and clean one article. AI analysis is handled separately."""
 
     html = fetch_article_html(str(article.url))
 
@@ -149,34 +147,6 @@ def process_article(article) -> Optional[dict]:
 
     article.content = cleaned_content
     article.content_hash = generate_content_hash(cleaned_content)
-
-    # Initialize AI fields so articles remain valid if Gemini fails.
-    article.ai_summary = None
-    article.ai_key_points = None
-    article.ai_category = None
-    article.ai_sentiment = None
-
-    try:
-        ai_result = generate_news_summary(
-            title=article.title,
-            content=cleaned_content[:20000],
-        )
-
-        article.ai_summary = ai_result["summary"]
-        article.ai_key_points = ai_result["key_points"]
-        article.ai_category = ai_result["category"]
-        article.ai_sentiment = ai_result["sentiment"]
-
-        logger.info(
-            "AI analysis completed for article: %s",
-            article.title,
-        )
-
-    except Exception:
-        logger.exception(
-            "AI analysis failed for article: %s. Continuing without AI analysis.",
-            article.title,
-        )
 
     return article.model_dump(mode="json")
 
@@ -310,15 +280,15 @@ def run_scraping_pipeline() -> dict:
 
 
 def run_ai_analysis_pipeline() -> dict:
-    """Run Gemini AI analysis on all pending (unanalyzed) articles in DB."""
+    """Run Gemini AI analysis on pending articles, saving to article_ai_analyses."""
 
-    logger.info("Starting AI analysis pipeline")
+    logger.info("Starting Gemini AI analysis pipeline")
 
     try:
         with SessionLocal() as db:
-            pending = get_ai_pending_articles(db, limit=MAX_ARTICLES_PER_RUN)
+            pending = get_ai_pending_articles(db, ai_model=AI_MODEL_GEMINI, limit=MAX_ARTICLES_PER_RUN)
     except SQLAlchemyError as error:
-        logger.exception("Failed to fetch pending articles")
+        logger.exception("Failed to fetch pending articles for Gemini")
         return {"status": "failed", "error": str(error)}
 
     if not pending:
@@ -339,27 +309,34 @@ def run_ai_analysis_pipeline() -> dict:
             )
 
             with SessionLocal() as db:
-                db_article = db.get(type(article), article.id)
-                db_article.ai_summary = ai_result["summary"]
-                db_article.ai_key_points = ai_result["key_points"]
-                db_article.ai_category = ai_result["category"]
-                db_article.ai_sentiment = ai_result["sentiment"]
-                db.commit()
+                upsert_ai_analysis(
+                    db=db,
+                    article_id=article.id,
+                    ai_model=AI_MODEL_GEMINI,
+                    analysis=ai_result,
+                    status="completed",
+                )
 
             analyzed += 1
-            logger.info("AI analysis completed for: %s", article.title)
+            logger.info("Gemini analysis saved for article ID %s: %s", article.id, article.title)
 
-        except Exception:
+        except Exception as exc:
             failed += 1
-            logger.exception("AI analysis failed for: %s", article.title)
+            logger.exception("Gemini analysis failed for article ID %s", article.id)
+            try:
+                with SessionLocal() as db:
+                    upsert_ai_analysis(
+                        db=db,
+                        article_id=article.id,
+                        ai_model=AI_MODEL_GEMINI,
+                        status="failed",
+                        error_message=str(exc),
+                    )
+            except Exception:
+                logger.exception("Could not save Gemini failure for article ID %s", article.id)
 
-    result = {
-        "status": "completed",
-        "analyzed": analyzed,
-        "failed": failed,
-    }
-
-    logger.info("AI analysis pipeline completed: %s", result)
+    result = {"status": "completed", "analyzed": analyzed, "failed": failed}
+    logger.info("Gemini analysis pipeline completed: %s", result)
     return result
 
 

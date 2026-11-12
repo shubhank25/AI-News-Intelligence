@@ -6,10 +6,10 @@
  */
 
 import { ExternalLink, CalendarDays, BrainCircuit } from "lucide-react";
-import type { NewsArticle } from "../../types/news";
+import type { NewsArticleWithAnalysis } from "../../types/news";
 
 interface NewsCardProps {
-  article: NewsArticle;
+  article: NewsArticleWithAnalysis;
 }
 
 function NewsCard({ article }: NewsCardProps) {

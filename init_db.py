@@ -6,7 +6,7 @@ Usage:
 """
 
 from app.database.connection import Base, engine, test_database_connection
-from app.database.models import NewsArticleModel  # noqa: F401 — registers model with Base
+from app.database.models import ArticleAIAnalysis, NewsArticleModel  # noqa: F401
 
 
 def init_db():
@@ -23,7 +23,7 @@ def init_db():
 
     print("Done. Tables created:")
     for table in Base.metadata.sorted_tables:
-        print(f"  ✓ {table.name}")
+        print(f"  + {table.name}")
 
 
 if __name__ == "__main__":

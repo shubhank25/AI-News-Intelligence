@@ -1,15 +1,21 @@
-
 /**
  * Purpose:
  * Centralizes HTTP communication with the FastAPI backend.
- * Provides reusable methods for fetching news and statistics.
+ * All AI-specific calls pass ai_model to scope results correctly.
  */
 
 import axios from "axios";
-import type { NewsArticle, NewsStatistics } from "../types/news";
 
 import type {
+  AIModel,
   CategoryStatistic,
+  NewsArticle,
+  NewsPageResponse,
+  NewsStatistics,
+  OllamaAnalysisListResponse,
+  OllamaAnalysisStatus,
+  OllamaAnalyzedArticle,
+  OllamaPendingListResponse,
   PublishingTrend,
 } from "../types/news";
 
@@ -18,25 +24,54 @@ const api = axios.create({
   timeout: 120000,
 });
 
-export const getNewsStatistics = async (): Promise<NewsStatistics> => {
-  const response = await api.get<NewsStatistics>("/news/stats");
+// ---------------------------------------------------------------------------
+// Statistics
+// ---------------------------------------------------------------------------
+
+export const getNewsStatistics = async (
+  aiModel: AIModel = "gemini",
+): Promise<NewsStatistics> => {
+  const response = await api.get<NewsStatistics>("/news/stats", {
+    params: { ai_model: aiModel },
+  });
   return response.data;
 };
 
-export const getLatestNews = async (
-  limit = 5,
-): Promise<NewsArticle[]> => {
+// ---------------------------------------------------------------------------
+// Unified All-News endpoint (API-level pagination + all filters)
+// ---------------------------------------------------------------------------
+
+export const getUnifiedNews = async (
+  limit = 10,
+  offset = 0,
+  search?: string,
+  aiCategory?: string,
+  aiSentiment?: string,
+  aiModel?: AIModel,
+): Promise<NewsPageResponse> => {
+  const response = await api.get<NewsPageResponse>("/news/unified", {
+    params: {
+      limit,
+      offset,
+      ...(search ? { search } : {}),
+      ...(aiCategory ? { ai_category: aiCategory } : {}),
+      ...(aiSentiment ? { ai_sentiment: aiSentiment } : {}),
+      ...(aiModel ? { ai_model: aiModel } : {}),
+    },
+  });
+  return response.data;
+};
+
+// ---------------------------------------------------------------------------
+// Basic article endpoints
+// ---------------------------------------------------------------------------
+
+export const getLatestNews = async (limit = 5): Promise<NewsArticle[]> => {
   const response = await api.get<NewsArticle[]>("/news", {
     params: { limit, offset: 0 },
   });
-
   return response.data;
 };
-
-/**
- * Purpose:
- * Fetches paginated news articles with an optional category filter.
- */
 
 export const getNewsArticles = async (
   limit = 10,
@@ -44,133 +79,136 @@ export const getNewsArticles = async (
   category?: string,
 ): Promise<NewsArticle[]> => {
   const response = await api.get<NewsArticle[]>("/news", {
-    params: {
-      limit,
-      offset,
-      ...(category ? { category } : {}),
-    },
+    params: { limit, offset, ...(category ? { category } : {}) },
   });
-
   return response.data;
 };
-
-
-/**
- * Purpose:
- * Provides API methods for retrieving news categories and
- * filtering articles by AI-generated sentiment.
- */
 
 export const getNewsCategories = async (): Promise<string[]> => {
   const response = await api.get<string[]>("/news/categories");
   return response.data;
 };
 
-export const getNewsBySentiment = async (
-  sentiment: "positive" | "negative" | "neutral",
-  limit = 100,
-  offset = 0,
-): Promise<NewsArticle[]> => {
-  const response = await api.get<NewsArticle[]>(
-    `/news/ai/sentiment/${sentiment}`,
-    { params: { limit, offset } },
-  );
+// ---------------------------------------------------------------------------
+// AI analysis endpoints — all scoped by ai_model
+// ---------------------------------------------------------------------------
 
-  return response.data;
-};
-
-
-/**
- * Purpose:
- * Retrieves news articles belonging to a selected AI-generated category.
- */
-
-export const getNewsByCategory = async (
-  category: string,
-  limit = 100,
-  offset = 0,
-): Promise<NewsArticle[]> => {
-  const response = await api.get<NewsArticle[]>(
-    `/news/ai/category/${encodeURIComponent(category)}`,
-    { params: { limit, offset } },
-  );
-
-  return response.data;
-};
-
-
-/**
- * Purpose:
- * Fetches distinct AI-generated news categories from the backend
- * for the All News page category filter.
- */
-export const getAICategories = async (): Promise<string[]> => {
-  const response = await api.get<string[]>("/news/ai/categories");
-  return response.data;
-};
-
-
-/**
- * Purpose:
- * Retrieves AI-analyzed and AI-pending news articles.
- * These functions power the AI Insights dashboard.
- */
 export const getAIAnalyzedArticles = async (
+  aiModel: AIModel = "gemini",
   limit = 10,
-  offset = 0
+  offset = 0,
 ): Promise<NewsArticle[]> => {
   const response = await api.get<NewsArticle[]>("/news/ai/analyzed", {
-    params: { limit, offset },
+    params: { ai_model: aiModel, limit, offset },
   });
-
   return response.data;
 };
 
 export const getAIPendingArticles = async (
+  aiModel: AIModel = "gemini",
   limit = 10,
-  offset = 0
+  offset = 0,
 ): Promise<NewsArticle[]> => {
   const response = await api.get<NewsArticle[]>("/news/ai/pending", {
-    params: { limit, offset },
+    params: { ai_model: aiModel, limit, offset },
   });
-
   return response.data;
 };
 
-/**
- * Purpose:
- * Fetches AI-generated category-wise article counts
- * for the News Analytics dashboard.
- */
-export const getCategoryAnalytics = async (): Promise<CategoryStatistic[]> => {
-  const response = await api.get<CategoryStatistic[]>(
-    "/news/analytics/categories"
+export const getAICategories = async (
+  aiModel: AIModel = "gemini",
+): Promise<string[]> => {
+  const response = await api.get<string[]>("/news/ai/categories", {
+    params: { ai_model: aiModel },
+  });
+  return response.data;
+};
+
+export const getAIAnalyzedCount = async (
+  aiModel: AIModel = "gemini",
+): Promise<number> => {
+  const response = await api.get<{ ai_model: string; total: number }>(
+    "/news/ai/analyzed/count",
+    { params: { ai_model: aiModel } },
   );
+  return response.data.total;
+};
 
+// ---------------------------------------------------------------------------
+// Analytics
+// ---------------------------------------------------------------------------
+
+export const getCategoryAnalytics = async (
+  aiModel: AIModel = "gemini",
+): Promise<CategoryStatistic[]> => {
+  const response = await api.get<CategoryStatistic[]>(
+    "/news/analytics/categories",
+    { params: { ai_model: aiModel } },
+  );
   return response.data;
 };
 
-/**
- * Purpose:
- * Fetches daily article publishing counts for the
- * News Analytics dashboard, with optional date filters.
- */
 export const getPublishingTrends = async (
   dateFrom?: string,
-  dateTo?: string
+  dateTo?: string,
 ): Promise<PublishingTrend[]> => {
   const response = await api.get<PublishingTrend[]>(
     "/news/analytics/publishing-trends",
-    {
-      params: {
-        date_from: dateFrom,
-        date_to: dateTo,
-      },
-    }
+    { params: { date_from: dateFrom, date_to: dateTo } },
   );
-
   return response.data;
 };
 
-export default api;
+// ---------------------------------------------------------------------------
+// ShubhAI (Ollama) endpoints — /api/ollama/*
+// ---------------------------------------------------------------------------
 
+export const getOllamaAnalyses = async (
+  limit = 10,
+  offset = 0,
+): Promise<OllamaAnalysisListResponse> => {
+  const response = await api.get<OllamaAnalysisListResponse>("/ollama/analyses", {
+    params: { limit, offset },
+  });
+  return response.data;
+};
+
+export const getOllamaAnalysisByArticle = async (
+  articleId: number,
+): Promise<OllamaAnalyzedArticle> => {
+  const response = await api.get<OllamaAnalyzedArticle>(
+    `/ollama/analyses/${articleId}`,
+  );
+  return response.data;
+};
+
+export const getOllamaAnalysisStatus =
+  async (): Promise<OllamaAnalysisStatus> => {
+    const response = await api.get<OllamaAnalysisStatus>("/ollama/status");
+    return response.data;
+  };
+
+export const getOllamaPendingArticles = async (
+  limit = 10,
+  offset = 0,
+): Promise<OllamaPendingListResponse> => {
+  const response = await api.get<OllamaPendingListResponse>("/ollama/pending", {
+    params: { limit, offset },
+  });
+  return response.data;
+};
+
+export const getOllamaCategories = async (): Promise<string[]> => {
+  const response = await api.get<string[]>("/ollama/categories");
+  return response.data;
+};
+
+export const getOllamaCategoryAnalytics =
+  async (): Promise<CategoryStatistic[]> => {
+    const response = await api.get<CategoryStatistic[]>(
+      "/ollama/analytics/categories",
+    );
+    return response.data;
+  };
+
+export default api;

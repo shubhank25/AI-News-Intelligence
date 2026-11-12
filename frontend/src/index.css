@@ -27,3 +27,17 @@ html[data-theme="light"] body {
   background-color: #f8fafc;
   color: #0f172a;
 }
+
+button:not(:disabled),
+a,
+[role="button"],
+input[type="submit"],
+input[type="button"],
+input[type="reset"] {
+  cursor: pointer;
+}
+
+button:disabled,
+[aria-disabled="true"] {
+  cursor: not-allowed;
+}
