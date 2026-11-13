@@ -8,13 +8,13 @@ article_ai_analyses table. Gemini records are never touched.
 
 from sqlalchemy.orm import Session
 
+from app.database.models import ArticleAIAnalysis, NewsArticleModel
 from app.database.repository import (
     AI_MODEL_SHUBHAI,
     count_ai_pending_articles,
     get_ai_pending_articles,
     upsert_ai_analysis,
 )
-from app.database.models import ArticleAIAnalysis, NewsArticleModel
 
 
 def get_pending_ollama_articles(

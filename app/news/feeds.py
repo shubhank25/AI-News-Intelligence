@@ -1,32 +1,17 @@
 """
 Purpose:
-This file maintains the RSS feed sources used by the application.
+This file manages the RSS feed sources used by the application.
 
-It provides a centralized list of news sources, including their names,
-feed URLs, and categories, so the RSS parser can process them.
+It loads RSS feed configurations from environment variables,
+including source names, feed URLs, categories, and languages.
+This allows news sources to be added, updated, or removed
+without modifying the application code.
 """
 
-# RSS feed configuration
-NEWS_FEEDS = [
-    {
-        "name": "BBC Technology",
-        "url": "https://feeds.bbci.co.uk/news/technology/rss.xml",
-        "category": "Technology",
-        "language": "en",
-    },
-    {
-        "name": "Hacker News",
-        "url": "https://hnrss.org/frontpage",
-        "category": "Technology",
-        "language": "en",
-    },
-    {
-        "name": "Google AI Blog",
-        "url": "https://blog.google/technology/google-labs/rss/",
-        "category": "Artificial Intelligence",
-        "language": "en",
-    },
-]
+import json
+import os
+
+NEWS_FEEDS = json.loads(os.getenv("NEWS_FEEDS", "[]"))
 
 
 def get_all_feeds():

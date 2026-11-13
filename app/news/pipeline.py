@@ -21,11 +21,11 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.database.connection import SessionLocal
 from app.database.repository import (
+    AI_MODEL_GEMINI,
     create_articles_bulk,
     get_ai_pending_articles,
     get_existing_article_urls,
     upsert_ai_analysis,
-    AI_MODEL_GEMINI,
 )
 from app.news.cleaner import clean_article_text
 from app.news.config import MAX_ARTICLES_PER_RUN, RAW_DATA_DIR
@@ -264,7 +264,9 @@ def run_scraping_pipeline() -> dict:
         logger.exception("Failed to save scraped articles to PostgreSQL")
 
     result = {
-        "status": "completed" if database_status == "completed" else "completed_with_database_error",
+        "status": "completed"
+        if database_status == "completed"
+        else "completed_with_database_error",
         "rss_articles_found": len(rss_articles),
         "scraped_articles": len(scraped_articles),
         "skipped_duplicates": skipped_duplicates,
@@ -286,13 +288,20 @@ def run_ai_analysis_pipeline() -> dict:
 
     try:
         with SessionLocal() as db:
-            pending = get_ai_pending_articles(db, ai_model=AI_MODEL_GEMINI, limit=MAX_ARTICLES_PER_RUN)
+            pending = get_ai_pending_articles(
+                db, ai_model=AI_MODEL_GEMINI, limit=MAX_ARTICLES_PER_RUN
+            )
     except SQLAlchemyError as error:
         logger.exception("Failed to fetch pending articles for Gemini")
         return {"status": "failed", "error": str(error)}
 
     if not pending:
-        return {"status": "completed", "analyzed": 0, "failed": 0, "message": "No pending articles found."}
+        return {
+            "status": "completed",
+            "analyzed": 0,
+            "failed": 0,
+            "message": "No pending articles found.",
+        }
 
     analyzed = 0
     failed = 0
@@ -318,7 +327,9 @@ def run_ai_analysis_pipeline() -> dict:
                 )
 
             analyzed += 1
-            logger.info("Gemini analysis saved for article ID %s: %s", article.id, article.title)
+            logger.info(
+                "Gemini analysis saved for article ID %s: %s", article.id, article.title
+            )
 
         except Exception as exc:
             failed += 1
@@ -333,7 +344,9 @@ def run_ai_analysis_pipeline() -> dict:
                         error_message=str(exc),
                     )
             except Exception:
-                logger.exception("Could not save Gemini failure for article ID %s", article.id)
+                logger.exception(
+                    "Could not save Gemini failure for article ID %s", article.id
+                )
 
     result = {"status": "completed", "analyzed": analyzed, "failed": failed}
     logger.info("Gemini analysis pipeline completed: %s", result)
